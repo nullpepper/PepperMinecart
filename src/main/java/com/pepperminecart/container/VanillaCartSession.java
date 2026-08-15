@@ -1,6 +1,8 @@
 package com.pepperminecart.container;
 
 import java.util.Map;
+import org.bukkit.Location;
+import org.bukkit.World;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.event.inventory.InventoryType;
@@ -40,7 +42,18 @@ class VanillaCartSession extends CartSession {
             Map<Integer, ItemStack> left = player.getInventory().addItem(item);
             for (ItemStack rest : left.values()) {
                 if (rest != null && !rest.getType().isAir()) {
-                    cart.getWorld().dropItemNaturally(cart.getLocation(), rest);
+                    // 矿车世界/位置可能已不可用（实体移除时关闭界面），退化为掉到玩家脚下；
+                    // 注意 world 非 null 但 location 为 null（实体已失效）同样需要回退，
+                    // 否则剩余物品既不掉落又被下方 top.setItem(i, null) 清空，造成物品丢失
+                    World world = cart.getWorld();
+                    Location loc = world != null ? cart.getLocation() : null;
+                    if (world == null || loc == null) {
+                        world = player.getWorld();
+                        loc = player.getLocation();
+                    }
+                    if (world != null && loc != null) {
+                        world.dropItemNaturally(loc, rest);
+                    }
                 }
             }
             top.setItem(i, null);

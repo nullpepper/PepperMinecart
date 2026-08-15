@@ -9,6 +9,7 @@ import java.util.UUID;
 import java.util.WeakHashMap;
 import org.bukkit.Bukkit;
 import org.bukkit.block.Container;
+import org.bukkit.entity.HumanEntity;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
@@ -17,6 +18,7 @@ import org.bukkit.event.Listener;
 import org.bukkit.event.inventory.InventoryClickEvent;
 import org.bukkit.event.inventory.InventoryCloseEvent;
 import org.bukkit.event.inventory.PrepareAnvilEvent;
+import org.bukkit.event.player.PlayerQuitEvent;
 import org.bukkit.inventory.Inventory;
 import org.bukkit.inventory.InventoryView;
 import org.bukkit.inventory.ItemStack;
@@ -37,7 +39,7 @@ public class CartSessionManager implements Listener {
     /** 玩家 UUID → 其打开中的矿车会话。 */
     private final Map<UUID, CartSession> open = new HashMap<>();
     /** 待判定的矿车铁砧界面：PrepareAnvilEvent 计算有效结果时登记，点击结果槽取走时消耗。弱引用键防泄漏。 */
-    private final Map<Inventory, Boolean> pendingAnvilTakes = new WeakHashMap<>();
+    private final Map<Inventory, AnvilCartSession.PendingAnvilTake> pendingAnvilTakes = new WeakHashMap<>();
 
     public CartSessionManager(JavaPlugin plugin, PluginConfig config, AnvilDamageTracker anvilTracker) {
         this.plugin = plugin;
@@ -62,12 +64,18 @@ public class CartSessionManager implements Listener {
         if (existing instanceof ContainerCartSession containerSession) {
             // 先开界面再登记：openInventory 会同步触发旧视图关闭（onClose → open.remove），
             // 若先登记会被旧视图的关闭回调误删，导致本会话后续关闭不再回写
-            player.openInventory(containerSession.top());
+            InventoryView view = player.openInventory(containerSession.top());
+            if (view == null) {
+                return null; // 打开被取消时不要登记会话，避免泄漏与后续 NPE
+            }
             open.put(player.getUniqueId(), containerSession);
             return containerSession.top();
         }
         Inventory inv = container.getInventory();
         InventoryView view = player.openInventory(inv);
+        if (view == null) {
+            return null; // 打开被取消时不要登记会话，避免泄漏与后续 NPE
+        }
         open.put(player.getUniqueId(), new ContainerCartSession(cart, inv, view, bsm, container));
         return inv;
     }
@@ -97,12 +105,17 @@ public class CartSessionManager implements Listener {
         }
     }
 
-    /** 回写并关闭该矿车仍打开中的界面（取下/销毁前调用，防编辑丢失与幽灵界面）。 */
+    /** 回写并关闭该矿车仍打开中的界面（取下/销毁前调用，防编辑丢失与幽灵界面）。
+     *  工作台/铁砧等原版虚拟界面每个玩家有独立 top Inventory/session，必须遍历全部会话关闭。 */
     public void flushAndClose(Minecart cart) {
         flushContainer(cart);
-        CartSession s = findSession(cart);
-        if (s != null) {
-            new ArrayList<>(s.top().getViewers()).forEach(viewer -> viewer.closeInventory());
+        UUID id = cart.getUniqueId();
+        for (CartSession s : new ArrayList<>(open.values())) {
+            if (s.cart().getUniqueId().equals(id)) {
+                for (HumanEntity viewer : new ArrayList<>(s.top().getViewers())) {
+                    viewer.closeInventory();
+                }
+            }
         }
     }
 
@@ -136,7 +149,7 @@ public class CartSessionManager implements Listener {
         if (!cartAnvil) {
             return;
         }
-        pendingAnvilTakes.put(event.getInventory(), Boolean.TRUE);
+        pendingAnvilTakes.put(event.getInventory(), AnvilCartSession.PendingAnvilTake.prepared());
     }
 
     @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
@@ -160,7 +173,28 @@ public class CartSessionManager implements Listener {
         if (s == null) {
             return;
         }
-        s.onPlayerClose(player);
+        try {
+            s.onPlayerClose(player);
+        } catch (RuntimeException ex) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "[PepperMinecart] 玩家关闭矿车界面时处理异常: " + player.getUniqueId(), ex);
+        }
+    }
+
+    /** 玩家退出时主动清理其矿车会话，避免离线后残留虚拟界面物品。 */
+    @EventHandler(priority = EventPriority.MONITOR)
+    public void onQuit(PlayerQuitEvent event) {
+        Player player = event.getPlayer();
+        CartSession s = open.remove(player.getUniqueId());
+        if (s == null) {
+            return;
+        }
+        try {
+            s.onPlayerClose(player);
+        } catch (RuntimeException ex) {
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "[PepperMinecart] 玩家退出时关闭矿车界面异常: " + player.getUniqueId(), ex);
+        }
     }
 
     /** 服务器关闭/插件卸载时兜底保存与回收。 */
@@ -171,9 +205,16 @@ public class CartSessionManager implements Listener {
             Player player = Bukkit.getPlayer(entry.getKey());
             CartSession s = entry.getValue();
             if (player != null && player.isOnline()) {
-                // 多态关闭：容器写回 PDC、虚拟界面回收残留
-                s.onPlayerClose(player);
-                player.closeInventory();
+                // 先移除再手动 onPlayerClose：closeInventory 触发的 onClose 不会再处理同一会话，
+                // 避免重复 flush / 重复音效
+                open.remove(entry.getKey());
+                try {
+                    s.onPlayerClose(player);
+                    player.closeInventory();
+                } catch (RuntimeException ex) {
+                    plugin.getLogger().log(java.util.logging.Level.WARNING,
+                            "[PepperMinecart] 关闭玩家矿车界面异常: " + entry.getKey(), ex);
+                }
             }
         }
         open.clear();

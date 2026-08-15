@@ -50,7 +50,11 @@ public class PluginConfig {
         parseMaterials(c.getStringList("disabled-blocks"), disabledBlocks);
         parseMaterials(c.getStringList("enabled-blocks"), enabledBlocks);
         respectProtection = c.getBoolean("respect-protection", true);
-        displayBlockOffset = c.getInt("display-block-offset", 6);
+        int rawDisplayOffset = c.getInt("display-block-offset", 6);
+        displayBlockOffset = Math.max(0, Math.min(16, rawDisplayOffset));
+        if (rawDisplayOffset != displayBlockOffset && logger != null) {
+            logger.warning("config.yml 中的 display-block-offset 超出 0-16 范围，已修正为 " + displayBlockOffset);
+        }
         interactionCooldownMs = Math.max(0, c.getInt("interaction-cooldown-ms", 250));
         soundPlace = c.getBoolean("sounds.place", true);
         soundTakeOff = c.getBoolean("sounds.take-off", true);

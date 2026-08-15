@@ -29,6 +29,7 @@ import org.bukkit.event.block.BlockBreakEvent;
 import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.inventory.EquipmentSlot;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -70,12 +71,17 @@ public class InteractionListener implements Listener {
         if (!player.hasPermission("pepperminecart.use")) {
             return;
         }
-        if (!cooldown.tryUse(player)) {
-            return;
-        }
-
         boolean sneaking = player.isSneaking();
         CartTypeHandler type = engine.resolve(cart);
+
+        // 冷却只作用于插件可能处理的交互；空普通矿车非潜行是原版乘坐，不消耗冷却也不拦截
+        if (type == null && !sneaking) {
+            return;
+        }
+        if (!cooldown.tryUse(player)) {
+            e.setCancelled(true);
+            return;
+        }
 
         // 原版特殊矿车（无插件数据的箱子矿车等）：潜行时按实体类型解析取下类型（受开关控制）
         if (type == null && sneaking && config.vanillaCartPickupAllowed()) {
@@ -119,11 +125,15 @@ public class InteractionListener implements Listener {
                 return;
             }
             ctx = engine.contextFor(cart, type);
-            engine.takeOff(player, ctx, mode);
+            // 先取消原版交互再执行取下：takeOff 内部异常时也不会继续触发原版上车/打开界面
             e.setCancelled(true);
+            engine.takeOff(player, ctx, mode);
         } else {
-            ctx = engine.contextFor(cart, type);
-            if (type.onInteract(player, ctx)) {
+            // 非潜行交互只对真正受管（有插件 PDC）的矿车生效：contextFor 会无条件登记上下文，
+            // 若用于仅显示方块/第三方数据的矿车会把外车"收养"进受管集合（禁乘/错误掉落）。
+            // contextOrNull 只在 PDC 受管时登记/复用上下文，显示-only 矿车直接放行原版行为。
+            ctx = engine.contextOrNull(cart);
+            if (ctx != null && engine.safeInteract(player, ctx)) {
                 e.setCancelled(true);
             }
         }
@@ -220,13 +230,19 @@ public class InteractionListener implements Listener {
             plugin.getLogger().log(Level.WARNING, "[PepperMinecart] 放置方块到矿车时发生异常，本次放置已取消", ex);
             try {
                 engine.removeCart(cart);
-                CartData.clear(cart);
+                CartData.clear(cart, type.getId().getNamespace());
                 new CartBlockDisplay(cart).clear();
                 // 特殊矿车转换若已部分生成替代实体（replaceEntity 之后抛异常），一并回收，避免泄漏
                 if (ctx != null && ctx.getMinecart() != cart) {
                     Minecart replaced = ctx.getMinecart();
                     engine.removeCart(replaced);
-                    CartData.clear(replaced);
+                    CartData.clear(replaced, type.getId().getNamespace());
+                    // 内容物已在转换时转移进原版库存：回滚移除替代实体前清空，
+                    // 防止 remove() 触发原版 dropContents（DISCARDED.shouldDestroy()==true）
+                    // 把内容物掉到地面，而放置物品仍在玩家手中，造成内容物复制
+                    if (replaced instanceof InventoryHolder holder) {
+                        holder.getInventory().clear();
+                    }
                     replaced.remove();
                 }
             } catch (RuntimeException rollbackEx) {

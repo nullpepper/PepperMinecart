@@ -1,6 +1,9 @@
 package com.pepperminecart.storage;
 
 import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Minecart;
@@ -111,9 +114,18 @@ public final class CartData {
      *  注意：必须快照键集再删除 —— getKeys() 返回的是活视图，边遍历边删除会抛
      *  ConcurrentModificationException（MockBukkit 与部分服务端实现上必现）。 */
     public static void clear(Minecart cart) {
+        clear(cart, new String[0]);
+    }
+
+    /** 清空本插件数据，并额外清理扩展处理器命名空间下的键。
+     *  扩展元数据应使用与 {@code CartTypeHandler.getId()} 相同的 namespace，
+     *  这样取下/销毁/报废时能随矿车数据一起清除，避免旧状态残留到下一次使用。 */
+    public static void clear(Minecart cart, String... extraNamespaces) {
         PersistentDataContainer pdc = cart.getPersistentDataContainer();
+        Set<String> namespaces = new HashSet<>(Set.of("pepperminecart"));
+        Collections.addAll(namespaces, extraNamespaces);
         for (NamespacedKey k : new ArrayList<>(pdc.getKeys())) {
-            if (k.getNamespace().equals("pepperminecart")) {
+            if (namespaces.contains(k.getNamespace())) {
                 pdc.remove(k);
             }
         }

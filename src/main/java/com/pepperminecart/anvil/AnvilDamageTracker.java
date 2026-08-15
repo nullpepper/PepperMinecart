@@ -58,6 +58,8 @@ public class AnvilDamageTracker {
                 cart.getWorld().dropItemNaturally(cart.getLocation(), new ItemStack(displayed));
             }
             cart.getWorld().playSound(cart.getLocation(), Sound.BLOCK_ANVIL_BREAK, 1f, 1f);
+            // 关闭所有仍打开该矿车铁砧界面的玩家，避免报废后继续使用虚拟铁砧
+            engine.closeCartSessionsLater(cart);
             return true;
         }
 

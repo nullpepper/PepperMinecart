@@ -73,6 +73,19 @@ public interface CartContext {
     /** 替换矿车实体（如转换为特殊矿车），自动复制数据并重新跟踪。 */
     void replaceEntity(Minecart newCart);
 
+    /**
+     * 解除本矿车的插件管理：清除插件 PDC 数据与显示方块，并移除引擎跟踪。
+     * 供 {@link CartTypeHandler#onTakeOff} 返回 {@link TakeOffOutcome#HANDLED} 且矿车
+     * 应还原为空车（不再受本插件管理）时调用；若矿车应继续保持受管
+     * （如转换为另一类型并重新写入类型数据），不要调用。
+     * <p>返回 {@code HANDLED} 的处理器必须自行完成管理清理——引擎在 HANDLED 路径
+     * 不再动作，若既不调用本方法也不改写 PDC，矿车会继续被引擎跟踪
+     * （禁止乘坐、每 tick 回调、破坏时按原数据掉落）。</p>
+     */
+    default void releaseCart() {
+        // 默认空实现：仅引擎内置实现（CartContextImpl）提供实际清理能力
+    }
+
     /** 矿车被破坏时是否掉落方块物品与容器内容（默认 true）。 */
     void setDropOnDestroy(boolean drop);
 }

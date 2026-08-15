@@ -9,18 +9,22 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.pepperminecart.display.CartBlockDisplay;
 import com.pepperminecart.storage.CartData;
 import java.util.List;
+import net.kyori.adventure.text.Component;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.World;
 import org.bukkit.block.Container;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Item;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.minecart.RideableMinecart;
+import org.bukkit.entity.minecart.StorageMinecart;
 import org.bukkit.event.entity.EntityRemoveEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BlockStateMeta;
+import org.bukkit.inventory.meta.ItemMeta;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -312,5 +316,192 @@ class MinecartFlowTest {
         assertEquals(org.bukkit.entity.EntityType.MINECART, ((Minecart) minecarts.get(0)).getType(),
                 "取下后应还原为普通矿车");
         assertNotNull(findInInventory(player, Material.CHEST), "取下后箱子物品应回到背包");
+    }
+
+    @Test
+    void takeOff_specialCartPreservesCustomName() {
+        PlayerMock player = server.addPlayer();
+        placeBlock(player, Material.CHEST, 1);
+
+        Minecart converted = world.getEntities().stream()
+                .filter(en -> en instanceof Minecart)
+                .map(en -> (Minecart) en)
+                .findFirst().orElseThrow();
+        converted.customName(Component.text("我的箱子矿车"));
+        converted.setCustomNameVisible(true);
+
+        player.setSneaking(true);
+        interact(player, converted);
+
+        Minecart normal = world.getEntities().stream()
+                .filter(en -> en instanceof Minecart)
+                .map(en -> (Minecart) en)
+                .findFirst().orElseThrow();
+        assertEquals(Component.text("我的箱子矿车"), normal.customName(),
+                "特殊矿车取下还原普通矿车时应保留自定义名");
+        assertTrue(normal.isCustomNameVisible(), "自定义名可见性应保留");
+    }
+
+    // ---- 异常/失效数据安全兜底 ----
+
+    @Test
+    void unknownType_takeOffReturnsStoredItemInsteadOfDeadCart() {
+        PlayerMock player = server.addPlayer();
+        RideableMinecart cart = spawnCart();
+        CartData.setCartType(cart, "ghost:missing");
+        CartData.setItem(cart, new ItemStack(Material.STONE));
+        CartData.setOriginalMaterial(cart, Material.STONE);
+
+        player.setSneaking(true);
+        PlayerInteractEntityEvent e = interact(player, cart);
+
+        assertTrue(e.isCancelled(), "未知类型矿车应能安全取下");
+        assertEquals(1, countInInventory(player, Material.STONE), "未知类型矿车取下应返还存储物品");
+        assertFalse(CartData.isManaged(cart), "取下后应清除失效 PDC");
+    }
+
+    @Test
+    void unknownType_destroyDropsStoredItem() {
+        RideableMinecart cart = spawnCart();
+        CartData.setCartType(cart, "ghost:missing");
+        CartData.setItem(cart, new ItemStack(Material.STONE));
+        CartData.setOriginalMaterial(cart, Material.STONE);
+
+        EntityRemoveEvent remove = new EntityRemoveEvent(cart, EntityRemoveEvent.Cause.DISCARD);
+        server.getPluginManager().callEvent(remove);
+
+        assertEquals(1, droppedItems(Material.STONE).size(), "未知类型矿车销毁应掉落存储物品");
+    }
+
+    @Test
+    void displayOnlySpecialMaterial_takeOffUsesGenericFallback() {
+        PlayerMock player = server.addPlayer();
+        RideableMinecart cart = spawnCart();
+        new CartBlockDisplay(cart).set(Material.CHEST);
+
+        player.setSneaking(true);
+        PlayerInteractEntityEvent e = interact(player, cart);
+
+        assertTrue(e.isCancelled(), "普通矿车显示特殊材质也应能安全取下");
+        assertEquals(1, countInInventory(player, Material.CHEST), "应返还显示方块对应的物品");
+        assertFalse(new CartBlockDisplay(cart).has(), "取下后显示方块应清除");
+        assertFalse(CartData.isManaged(cart), "无 PDC 的显示矿车取下后不应残留管理状态");
+    }
+
+    // ---- 审查回归：非潜行交互不收养显示-only 矿车 ----
+
+    @Test
+    void nonSneakInteract_doesNotAdoptDisplayOnlyCart() {
+        PlayerMock player = server.addPlayer();
+        RideableMinecart cart = spawnCart();
+        new CartBlockDisplay(cart).set(Material.BARREL); // 第三方仅设置显示方块，无插件 PDC
+        assertFalse(CartData.isManaged(cart));
+
+        player.setSneaking(false);
+        PlayerInteractEntityEvent e = interact(player, cart);
+
+        assertFalse(e.isCancelled(), "显示-only 矿车非潜行交互应放行原版行为（可乘坐/打开）");
+        assertFalse(plugin.engine().isManaged(cart), "显示-only 矿车不应被收养进受管集合");
+    }
+
+    // ---- 审查回归：特殊矿车转换中间状态（addCart 后、onPlaced 完成前中断） ----
+
+    @Test
+    void takeOff_intermediateSpecialStateReturnsStoredItem() {
+        PlayerMock player = server.addPlayer();
+        RideableMinecart cart = spawnCart();
+        CartData.setCartType(cart, "pepperminecart:special");
+        CartData.setItem(cart, new ItemStack(Material.CHEST));
+        CartData.setOriginalMaterial(cart, Material.CHEST);
+
+        player.setSneaking(true);
+        PlayerInteractEntityEvent e = interact(player, cart);
+
+        assertTrue(e.isCancelled(), "转换中间状态的矿车应能安全取下");
+        assertNotNull(findInInventory(player, Material.CHEST), "应返还存储物品而不是重建白板物品");
+        assertFalse(CartData.isManaged(cart), "取下后应清除 PDC");
+    }
+
+    // ---- 审查回归：特殊矿车原版 dropContents 内容物复制（DISCARDED.shouldDestroy()==true） ----
+
+    /**
+     * 取下带内容的箱子矿车：内容物只应存在于返还物品中，旧矿车原版库存必须在 remove() 前清空，
+     * 否则 Paper 的 Entity#remove()（RemovalReason.DISCARDED）会触发 AbstractMinecartContainer 的
+     * 原版 dropContents，把同一批内容物再掉落一份到地面，构成复制。
+     * 注意：MockBukkit 不模拟原版掉落，此测试断言的是"取下时原版库存已被清空"这一前置条件。
+     */
+    @Test
+    void takeOff_specialCartClearsVanillaInventoryBeforeRemoval() {
+        PlayerMock player = server.addPlayer();
+        placeBlock(player, Material.CHEST, 1);
+
+        StorageMinecart converted = world.getEntities().stream()
+                .filter(en -> en instanceof StorageMinecart)
+                .map(en -> (StorageMinecart) en)
+                .findFirst().orElseThrow();
+        converted.getInventory().setItem(0, new ItemStack(Material.DIAMOND, 3));
+
+        player.setSneaking(true);
+        interact(player, converted); // 取下 → 还原为普通矿车
+
+        for (ItemStack it : converted.getInventory().getContents()) {
+            assertTrue(it == null || it.getType().isAir(),
+                    "取下后旧矿车原版库存应已清空（防止 remove() 触发原版 dropContents 复制内容物）");
+        }
+        assertTrue(droppedItems(Material.DIAMOND).isEmpty(), "取下后地面不应有多余的内容物掉落");
+    }
+
+    /**
+     * 第三方 remove() 触发 DISCARD 销毁：引擎在 onCartDestroyed 前清空原版库存，
+     * 处理器只补掉方块物品、不再二次掉落内容物（真实服务端上内容物由原版 dropContents
+     * 掉落一次；此处断言插件不重复掉落，避免地面出现双份）。
+     */
+    @Test
+    void destroy_discardSpecialCart_doesNotDropContentsTwice() {
+        PlayerMock player = server.addPlayer();
+        placeBlock(player, Material.CHEST, 1);
+
+        StorageMinecart converted = world.getEntities().stream()
+                .filter(en -> en instanceof StorageMinecart)
+                .map(en -> (StorageMinecart) en)
+                .findFirst().orElseThrow();
+        converted.getInventory().setItem(0, new ItemStack(Material.DIAMOND, 3));
+
+        server.getPluginManager().callEvent(new EntityRemoveEvent(converted, EntityRemoveEvent.Cause.DISCARD));
+
+        assertTrue(droppedItems(Material.DIAMOND).isEmpty(), "DISCARD 销毁不应由插件二次掉落内容物");
+        assertEquals(1, droppedItems(Material.CHEST).size(), "仍应补掉方块物品（箱子）");
+    }
+
+    // ---- 审查回归：特殊矿车保留原方块物品的 ItemMeta ----
+
+    @Test
+    void takeOff_specialCartPreservesItemMeta() {
+        PlayerMock player = server.addPlayer();
+        RideableMinecart cart = spawnCart();
+        player.setSneaking(true);
+        ItemStack namedChest = new ItemStack(Material.CHEST);
+        ItemMeta meta = namedChest.getItemMeta();
+        meta.displayName(Component.text("宝藏箱"));
+        namedChest.setItemMeta(meta);
+        player.getInventory().setItemInMainHand(namedChest);
+        interact(player, cart); // 放置 → 转换为箱子矿车
+
+        Minecart converted = world.getEntities().stream()
+                .filter(en -> en instanceof Minecart)
+                .map(en -> (Minecart) en)
+                .findFirst().orElseThrow();
+        assertEquals(EntityType.CHEST_MINECART, converted.getType(), "箱子放置后应转换为箱子矿车");
+
+        ItemStack template = CartData.getItem(converted);
+        assertNotNull(template, "转换后应保存去内容模板");
+        assertEquals(Component.text("宝藏箱"), template.getItemMeta().displayName(), "模板应保留自定义名");
+
+        player.setSneaking(true);
+        interact(player, converted); // 取下
+
+        ItemStack taken = findInInventory(player, Material.CHEST);
+        assertNotNull(taken, "取下后箱子物品应回到背包");
+        assertEquals(Component.text("宝藏箱"), taken.getItemMeta().displayName(), "取下物品应保留自定义名");
     }
 }

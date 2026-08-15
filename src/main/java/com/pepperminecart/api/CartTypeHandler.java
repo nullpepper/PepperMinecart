@@ -54,7 +54,10 @@ public interface CartTypeHandler {
      *
      * @return {@link TakeOffOutcome#DEFAULT} 由引擎执行默认取下流程；
      *         {@link TakeOffOutcome#HANDLED} 表示本处理器已完整处理（含实体替换与物品交付），
-     *         引擎不再动作
+     *         引擎不再动作——此时处理器必须自行完成管理清理：若矿车应还原为空车，
+     *         调用 {@link CartContext#releaseCart()}；若通过 {@link CartContext#replaceEntity}
+     *         替换实体后仍需受管，则保持/改写 PDC 使引擎继续跟踪。遗漏清理会导致矿车
+     *         继续被引擎视为受管（禁止乘坐、每 tick 回调、破坏时按原数据掉落）。
      */
     default TakeOffOutcome onTakeOff(Player player, CartContext ctx, TakeOffResult result) {
         return TakeOffOutcome.DEFAULT;

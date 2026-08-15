@@ -10,16 +10,20 @@ import com.pepperminecart.container.CartSessionManager;
 import com.pepperminecart.display.CartBlockDisplay;
 import com.pepperminecart.impl.CartContextImpl;
 import com.pepperminecart.registry.CartTypeRegistry;
+import com.pepperminecart.registry.handler.GenericBlockHandler;
 import com.pepperminecart.storage.CartData;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
+import java.util.function.Consumer;
 import java.util.logging.Level;
+import org.bukkit.Chunk;
 import org.bukkit.GameRule;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
+import org.bukkit.World;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Minecart;
@@ -34,6 +38,7 @@ import org.bukkit.event.entity.EntityDismountEvent;
 import org.bukkit.event.vehicle.VehicleMoveEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.event.world.ChunkUnloadEvent;
+import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.inventory.meta.BlockStateMeta;
 import org.bukkit.plugin.Plugin;
@@ -74,29 +79,70 @@ public class CartEngine implements Listener {
         contexts.clear();
     }
 
+    /** 插件启用时扫描已加载区块中的存量受管矿车（ChunkLoadEvent 不会为已加载区块再次触发）。 */
+    public void registerLoadedCarts() {
+        for (World world : plugin.getServer().getWorlds()) {
+            for (Chunk chunk : world.getLoadedChunks()) {
+                forEachMinecartInChunk(chunk, this::registerManagedCart);
+            }
+        }
+    }
+
     // ---- 类型解析 ----
 
-    /** 解析矿车类型：PDC cart-type id 优先，显示方块 material 兜底（兼容第三方显示/老数据）。 */
+    /**
+     * 解析矿车类型：PDC cart-type id 优先，显示方块 material 兜底（兼容第三方显示/老数据）。
+     * 对“cart-type 存在但注册表已无对应类型”或“普通矿车显示特殊矿车材质”的情况，
+     * 回退到安全通用处理，避免矿车变成无法取下/销毁时丢物品的“死车”。
+     */
     public CartTypeHandler resolve(Minecart cart) {
         String id = CartData.getCartType(cart);
         if (id != null) {
             try {
                 CartTypeHandler handler = registry.byId(NamespacedKey.fromString(id));
                 if (handler != null) {
+                    if (handler instanceof VanillaCartSupport && cart.getType() == EntityType.MINECART) {
+                        // 普通矿车 + 特殊类型 PDC：转换中间状态（addCart 写入 PDC 后、onPlaced
+                        // 完成实体转换前中断，如服务器崩溃/插件禁用）。此时不能路由到
+                        // SpecialCartHandler——它按实体类型反查材质与库存，普通矿车取不到容器内容，
+                        // 取下/销毁会重建白板物品导致存储物品（含容器内容）丢失。回退通用处理器，
+                        // 按存储物品原样归还。
+                        return genericFallback();
+                    }
                     return handler;
                 }
             } catch (IllegalArgumentException ignored) {
             }
-            // cart-type 存在但注册表已无对应类型（如第三方注销/老数据失效）：
-            // 不再按显示材质兜底，避免静默重路由到拥有该材质的其它类型，
-            // 导致取下/销毁走错逻辑（如 CHEST 显示 → SpecialCartHandler.getTakeOffItem 返回 null 丢物品）
-            return null;
+            // 类型已失效：若实体本身是原版特殊矿车（箱子/漏斗等），仍交给支持它的处理器安全接管；
+            // 否则回退通用处理器，至少能按存储物品/原始材质/显示材质取下或掉落，避免数据丢失。
+            CartTypeHandler vanilla = resolveVanillaPickup(cart);
+            return vanilla != null ? vanilla : genericFallback();
         }
         Material m = new CartBlockDisplay(cart).material();
         if (m != null && m != Material.AIR) {
-            return registry.byMaterial(m);
+            CartTypeHandler handler = registry.byMaterial(m);
+            if (handler instanceof VanillaCartSupport && cart.getType() == EntityType.MINECART) {
+                // 普通矿车显示 CHEST/HOPPER/FURNACE 等特殊矿车材质时，不能路由到 SpecialCartHandler：
+                // 它按实体类型反查材质，普通矿车会返回 null，导致取下/销毁丢物品。
+                return genericFallback();
+            }
+            return handler != null ? handler : genericFallback();
+        }
+        // 显示缺失但仍有存储物品（老数据/第三方清除了显示）：按存储物品类型安全解析
+        ItemStack stored = CartData.getItem(cart);
+        if (stored != null) {
+            CartTypeHandler handler = registry.byMaterial(stored.getType());
+            if (handler instanceof VanillaCartSupport && cart.getType() == EntityType.MINECART) {
+                return genericFallback();
+            }
+            return handler != null ? handler : genericFallback();
         }
         return null;
+    }
+
+    /** 未知/异常类型的安全兜底：按存储物品、原始材质或显示方块执行通用取下/掉落。 */
+    private CartTypeHandler genericFallback() {
+        return GenericBlockHandler.INSTANCE;
     }
 
     public boolean isManaged(Minecart cart) {
@@ -133,29 +179,56 @@ public class CartEngine implements Listener {
         CartData.setItem(cart, placedItem);
         CartData.setOriginalMaterial(cart, placedItem.getType());
         CartContextImpl ctx = new CartContextImpl(this, config, cart, type);
+        World world = cart.getWorld();
+        Location loc = cart.getLocation();
+        if (world != null && loc != null) {
+            ctx.updateSnapshot(world, loc);
+        }
         contexts.put(cart.getUniqueId(), ctx);
         return ctx;
     }
 
-    /** 获取受管上下文；非受管矿车返回 null。 */
+    /** 获取受管上下文；非受管矿车返回 null。注册表类型变化时自动重建 context。
+     *  只有已写入插件 PDC 的矿车才会被纳入受管集合；仅有显示方块/第三方数据的矿车
+     *  不会被意外收养（临时取下流程请使用 {@link #contextFor}）。 */
     public CartContextImpl contextOrNull(Minecart cart) {
         CartContextImpl ctx = contexts.get(cart.getUniqueId());
-        if (ctx == null) {
-            CartTypeHandler type = resolve(cart);
-            if (type == null) {
-                return null;
-            }
-            ctx = new CartContextImpl(this, config, cart, type);
-            contexts.put(cart.getUniqueId(), ctx);
+        if (ctx == null && !CartData.isManaged(cart)) {
+            return null;
         }
-        return ctx;
+        return contextForInternal(cart, resolve(cart));
     }
 
     /** 用已知类型获取/登记上下文（不写 PDC；用于外来原版矿车的取下流程）。 */
     public CartContextImpl contextFor(Minecart cart, CartTypeHandler type) {
+        return contextForInternal(cart, type);
+    }
+
+    /** 统一上下文获取/刷新入口：已有 context 且类型变化时重建，避免交互路径继续使用旧 handler。 */
+    private CartContextImpl contextForInternal(Minecart cart, CartTypeHandler type) {
         CartContextImpl ctx = contexts.get(cart.getUniqueId());
+        if (type == null) {
+            // 当前无法解析时：已有 context 保留（避免正在使用的旧类型被临时注销打断），无 context 则返回 null
+            return ctx;
+        }
         if (ctx == null) {
             ctx = new CartContextImpl(this, config, cart, type);
+            World world = cart.getWorld();
+            Location loc = cart.getLocation();
+            if (world != null && loc != null) {
+                ctx.updateSnapshot(world, loc);
+            }
+            contexts.put(cart.getUniqueId(), ctx);
+        } else if (ctx.getType() != type && type != GenericBlockHandler.INSTANCE) {
+            // 同一矿车的类型被覆盖/重注册后，旧 context 仍持有旧 handler；这里重建以使用最新类型。
+            // 但若解析结果只是“未知/失效类型”的通用兜底，则保留已有 context，
+            // 避免正在使用的旧类型被临时注销时被打断。
+            ctx = new CartContextImpl(this, config, cart, type);
+            World world = cart.getWorld();
+            Location loc = cart.getLocation();
+            if (world != null && loc != null) {
+                ctx.updateSnapshot(world, loc);
+            }
             contexts.put(cart.getUniqueId(), ctx);
         }
         return ctx;
@@ -195,6 +268,32 @@ public class CartEngine implements Listener {
         }
     }
 
+    /** 延迟 1 tick 关闭该矿车全部界面（用于铁砧报废等不能在事件链中同步 close 的场景）。 */
+    public void closeCartSessionsLater(Minecart cart) {
+        plugin.getServer().getScheduler().runTask(plugin, () -> flushCartSessions(cart));
+    }
+
+    /** 统一异常屏障：单个 handler 回调异常只记录并跳过，不污染事件链路。 */
+    private void safeHandler(String action, CartTypeHandler handler, Runnable runnable) {
+        try {
+            runnable.run();
+        } catch (RuntimeException ex) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[PepperMinecart] 矿车类型 " + handler.getId() + " " + action + " 异常，已跳过该矿车", ex);
+        }
+    }
+
+    /** 交互回调的异常安全入口（供 InteractionListener 使用）。 */
+    public boolean safeInteract(Player player, CartContextImpl ctx) {
+        try {
+            return ctx.getType().onInteract(player, ctx);
+        } catch (RuntimeException ex) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[PepperMinecart] 矿车类型 " + ctx.getType().getId() + " onInteract 异常，已按未处理交互跳过", ex);
+            return false;
+        }
+    }
+
     // ---- 取下编排（交互监听器完成前置判定后委托） ----
 
     /**
@@ -210,61 +309,131 @@ public class CartEngine implements Listener {
      */
     public void takeOff(Player player, CartContextImpl ctx, TakeOffResult mode) {
         Minecart cart = ctx.getMinecart();
-        flushCartSessions(cart);
-
-        TakeOffOutcome outcome = ctx.getType().onTakeOff(player, ctx, mode);
-        if (outcome == TakeOffOutcome.HANDLED) {
+        if (mode == TakeOffResult.DISABLED) {
+            // 禁止取下：不还原矿车、不交付物品。正常路径由 InteractionListener 前置拦截，
+            // 这里防御 API 直接调用（配置为 DISABLED 或容器策略 FORBIDDEN 时不应执行取下流程）。
+            // 注意：若调用方刚用 contextFor 登记了临时 context，需自行移除（引擎无法区分
+            // 临时 context 与常驻 context，取下未发生时不改动受管状态）。
             return;
         }
+        // 提前记录位置快照：即使实体在流程中失效，后续 giveItem/dropItem 仍有可用的掉落位置
+        World snapshotWorld = cart.getWorld();
+        Location snapshotLoc = cart.getLocation();
+        if (snapshotWorld != null && snapshotLoc != null) {
+            ctx.updateSnapshot(snapshotWorld, snapshotLoc);
+        }
+        boolean handled = false;
+        try {
+            try {
+                flushCartSessions(cart);
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[PepperMinecart] 取下前回写/关闭矿车界面异常，本次取下已取消: " + cart.getUniqueId(), ex);
+                return;
+            }
 
-        // 提前捕获取下物品（随后清 PDC/移除实体后将无法读取原始数据）
-        ItemStack item = ctx.getType().getTakeOffItem(ctx);
+            TakeOffOutcome outcome;
+            try {
+                outcome = ctx.getType().onTakeOff(player, ctx, mode);
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[PepperMinecart] 矿车类型 " + ctx.getType().getId() + " onTakeOff 异常，本次取下已取消: "
+                                + cart.getUniqueId(), ex);
+                return;
+            }
+            if (outcome == TakeOffOutcome.HANDLED) {
+                handled = true;
+                return;
+            }
 
-        Minecart current = ctx.getMinecart();
-        Location loc = current.isValid() ? current.getLocation() : cart.getLocation();
-        if (current.isValid()) {
-            if (current.getType() != EntityType.MINECART) {
-                // 特殊矿车 → 还原为普通矿车
-                RideableMinecart normal;
-                try {
-                    // 先成功生成替代矿车再移除原矿车：避免生成被其它插件取消时旧矿车已删、内容全损
-                    normal = MinecartSwap.spawnReplacement(MinecartSwap.capture(current), RideableMinecart.class);
-                } catch (RuntimeException ex) {
-                    plugin.getLogger().log(Level.WARNING, "[PepperMinecart] 还原普通矿车失败，本次取下已取消", ex);
-                    // 移除本次流程登记的上下文，避免外来原版矿车残留受管集合
+            // 提前捕获取下物品（随后清 PDC/移除实体后将无法读取原始数据）
+            ItemStack item;
+            try {
+                item = ctx.getType().getTakeOffItem(ctx);
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[PepperMinecart] 矿车类型 " + ctx.getType().getId() + " getTakeOffItem 异常，本次取下已取消: "
+                                + cart.getUniqueId(), ex);
+                return;
+            }
+            if (item == null || item.getType().isAir()) {
+                // 拿不到可返还物品时不要清空矿车数据，避免矿车被还原但玩家一无所得；
+                // 同时必须移除本次流程登记的 context，防止外来原版矿车残留受管集合
+                plugin.getLogger().warning("[PepperMinecart] 取下矿车时未能取得可返还物品，已取消取下: "
+                        + cart.getUniqueId());
+                return;
+            }
+
+            Minecart current = ctx.getMinecart();
+            Location loc = current.isValid()
+                    ? current.getLocation()
+                    : (cart.getLocation() != null ? cart.getLocation() : ctx.lastLocation());
+            if (current.isValid()) {
+                if (current.getType() != EntityType.MINECART) {
+                    // 特殊矿车 → 还原为普通矿车
+                    RideableMinecart normal;
+                    try {
+                        // 先成功生成替代矿车再移除原矿车：避免生成被其它插件取消时旧矿车已删、内容全损
+                        normal = MinecartSwap.spawnReplacement(MinecartSwap.capture(current), RideableMinecart.class);
+                    } catch (RuntimeException ex) {
+                        plugin.getLogger().log(Level.WARNING, "[PepperMinecart] 还原普通矿车失败，本次取下已取消", ex);
+                        return; // 原矿车保持原样（内容未动、物品未交付）
+                    }
+                    // 迁移自定义名，避免命名过的特殊矿车取下后名字丢失
+                    if (current.customName() != null) {
+                        normal.customName(current.customName());
+                        normal.setCustomNameVisible(current.isCustomNameVisible());
+                    }
+                    // 再解除管理并清数据、移除实体，防止 EntityRemoveEvent 把旧矿车误判为销毁而重复掉落
                     removeCart(current);
-                    return; // 原矿车保持原样（内容未动、物品未交付）
+                    CartData.clear(current, ctx.getType().getId().getNamespace());
+                    // 内容物已由 getTakeOffItem 组装进返还物品：先清空原版库存再移除实体。
+                    // Paper 的 Entity#remove() 走 RemovalReason.DISCARDED（shouldDestroy()==true），
+                    // AbstractMinecartContainer#remove 会触发原版 dropContents 把内容物再次掉到地面，
+                    // 与返还物品中嵌入的内容物构成复制。
+                    if (current instanceof InventoryHolder holder) {
+                        holder.getInventory().clear();
+                    }
+                    current.remove();
+                    // 上下文重定向到新普通矿车：后续 giveItem/dropItem 落在有效实体上（旧实体已移除）
+                    ctx.repoint(normal);
+                } else {
+                    new CartBlockDisplay(current).clear();
+                    CartData.clear(current, ctx.getType().getId().getNamespace());
+                    removeCart(current);
                 }
-                // 再解除管理并清数据、移除实体，防止 EntityRemoveEvent 把旧矿车误判为销毁而重复掉落
-                removeCart(current);
-                CartData.clear(current);
-                current.remove();
-                // 上下文重定向到新普通矿车：后续 giveItem/dropItem 落在有效实体上（旧实体已移除）
-                ctx.repoint(normal);
-            } else {
-                new CartBlockDisplay(current).clear();
-                CartData.clear(current);
-                removeCart(current);
             }
-        }
 
-        if (item != null && !item.getType().isAir()) {
             // 容器类 + DROP 策略：内容物全部掉落地面，容器物品清空后按 take-off-mode 处理
-            if (ctx.getType().isContainerPickupControlled(item.getType())
-                    && config.containerPickupPolicy() == ContainerPickupPolicy.DROP) {
-                spillContainerContents(item, loc);
+            try {
+                if (ctx.getType().isContainerPickupControlled(item.getType())
+                        && config.containerPickupPolicy() == ContainerPickupPolicy.DROP) {
+                    spillContainerContents(item, loc);
+                }
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[PepperMinecart] 矿车类型 " + ctx.getType().getId() + " isContainerPickupControlled 异常，已跳过内容物倾倒: "
+                                + cart.getUniqueId(), ex);
             }
-            // 交给 giveItem 按取下策略统一分发（背包优先、溢出落地；DROP 直接落地）
-            ctx.giveItem(player, item);
-        }
+            // 交给 giveItem 按本次取下策略统一分发（背包优先、溢出落地；DROP 直接落地）
+            ctx.giveItem(player, item, mode);
 
-        if (config.soundTakeOff()) {
-            loc.getWorld().playSound(loc, Sound.BLOCK_STONE_BREAK, 1f, 1f);
+            if (config.soundTakeOff() && loc != null && loc.getWorld() != null) {
+                loc.getWorld().playSound(loc, Sound.BLOCK_STONE_BREAK, 1f, 1f);
+            }
+        } finally {
+            // 非 HANDLED 路径无论正常完成/提前取消/实体失效，都确保不泄漏受管 context
+            if (!handled) {
+                removeCart(cart.getUniqueId());
+            }
         }
     }
 
     /** 清空容器物品的内容物并全部掉落到矿车位置地面。 */
     private static void spillContainerContents(ItemStack item, Location loc) {
+        if (loc == null || loc.getWorld() == null) {
+            return; // 位置/世界不可用，无法掉落内容物；至少不 NPE
+        }
         if (!(item.getItemMeta() instanceof BlockStateMeta bsm)) {
             return;
         }
@@ -292,9 +461,19 @@ public class CartEngine implements Listener {
             if (!cart.isValid() || cart.isDead()) {
                 // 实体已失效（未触发 EntityRemoveEvent 的异常路径）：回写/关闭打开中的容器会话，
                 // 避免幽灵界面与编辑残留；不在此处掉落物品，防止与实体持久化数据重复
-                flushCartSessions(cart);
+                try {
+                    flushCartSessions(cart);
+                } catch (RuntimeException ex) {
+                    plugin.getLogger().log(Level.WARNING,
+                            "[PepperMinecart] 清理失效矿车会话时异常，已跳过该矿车: " + cart.getUniqueId(), ex);
+                }
                 removeCart(cart.getUniqueId());
                 continue;
+            }
+            World world = cart.getWorld();
+            Location loc = cart.getLocation();
+            if (world != null && loc != null) {
+                ctx.updateSnapshot(world, loc);
             }
             try {
                 ctx.getType().onTick(ctx);
@@ -323,7 +502,7 @@ public class CartEngine implements Listener {
             e.setCancelled(true);
             return;
         }
-        ctx.getType().onMount(e.getEntity(), ctx);
+        safeHandler("onMount", ctx.getType(), () -> ctx.getType().onMount(e.getEntity(), ctx));
     }
 
     @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
@@ -335,7 +514,7 @@ public class CartEngine implements Listener {
         if (ctx == null) {
             return;
         }
-        ctx.getType().onDismount(e.getEntity(), ctx);
+        safeHandler("onDismount", ctx.getType(), () -> ctx.getType().onDismount(e.getEntity(), ctx));
     }
 
     /** 矿车移动（事件驱动，替代位置差分轮询）：分发到 onMove（如投掷器铁轨检测）。 */
@@ -344,11 +523,24 @@ public class CartEngine implements Listener {
         if (!(e.getVehicle() instanceof Minecart cart)) {
             return;
         }
-        CartContextImpl ctx = contexts.get(cart.getUniqueId());
+        CartContextImpl ctx = contextOrNull(cart);
         if (ctx == null) {
             return;
         }
-        ctx.getType().onMove(ctx);
+        World world = cart.getWorld();
+        Location loc = cart.getLocation();
+        if (world != null && loc != null) {
+            ctx.updateSnapshot(world, loc);
+        }
+        try {
+            ctx.getType().onMove(ctx);
+        } catch (RuntimeException ex) {
+            // 与 onTick 一致：单个矿车类型的移动回调异常只跳过该矿车，
+            // 避免异常传播污染其他监听器
+            plugin.getLogger().log(Level.WARNING,
+                    "[PepperMinecart] 矿车类型 " + ctx.getType().getId() + " onMove 异常，已跳过该矿车: "
+                            + cart.getUniqueId(), ex);
+        }
     }
 
     /**
@@ -360,9 +552,16 @@ public class CartEngine implements Listener {
     public void onEntityRemove(EntityRemoveEvent e) {
         if (e.getCause() == EntityRemoveEvent.Cause.UNLOAD) {
             // 区块卸载：实体仍会保存并重载，但先回写并关闭该矿车仍打开中的容器界面
-            // （卸载后实体脱离，无法再安全写回 PDC）
+            // （卸载后实体脱离，无法再安全写回 PDC），并移除 context 防止残留过期引用
             if (e.getEntity() instanceof Minecart cart) {
-                flushCartSessions(cart);
+                try {
+                    flushCartSessions(cart);
+                } catch (RuntimeException ex) {
+                    plugin.getLogger().log(Level.WARNING,
+                            "[PepperMinecart] 矿车卸载时回写/关闭会话异常: " + cart.getUniqueId(), ex);
+                } finally {
+                    removeCart(cart.getUniqueId());
+                }
             }
             return;
         }
@@ -373,60 +572,129 @@ public class CartEngine implements Listener {
         if (ctx == null) {
             return;
         }
+        // 提前缓存世界/位置：EntityRemoveEvent 触发时实体可能已不在世界中，
+        // 后续 getWorld()/getLocation() 可能返回 null，避免 NPE 或静默丢失掉落
+        World world = cart.getWorld();
+        Location loc = cart.getLocation();
+        ctx.updateSnapshot(world, loc);
         // 先回写并关闭打开中的容器界面，保证掉落物品包含最新编辑
-        flushCartSessions(cart);
+        try {
+            flushCartSessions(cart);
+        } catch (RuntimeException ex) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[PepperMinecart] 矿车销毁时回写/关闭会话异常: " + cart.getUniqueId(), ex);
+        }
         CartTypeHandler type = ctx.getType();
         // 原版特殊矿车（箱子/漏斗/熔炉/TNT/命令）的实体死亡路径（DEATH 且实体掉落开启）已由服务端
-        // 掉落矿车 + 方块本体 + 内容物（并清空原版库存），跳过处理器补掉逻辑避免重复掉落；
+        // 按原版设计掉落“合并物品（Minecart with Chest 等）+ 内容物”（并清空原版库存），
+        // 插件刻意跳过处理器补掉逻辑，避免与原版掉落重复；
         // 第三方 remove()/DISCARD 等无死亡路径仍需 onCartDestroyed 兜底
         boolean vanillaDeathDropped = e.getCause() == EntityRemoveEvent.Cause.DEATH
-                && Boolean.TRUE.equals(cart.getWorld().getGameRuleValue(GameRule.DO_ENTITY_DROPS));
+                && world != null && Boolean.TRUE.equals(world.getGameRuleValue(GameRule.DO_ENTITY_DROPS));
         if (vanillaDeathDropped && isVanillaCart(cart)) {
             ctx.setDropOnDestroy(false);
             removeCart(cart.getUniqueId());
             return;
         }
-        type.onCartDestroyed(ctx);
-        if (ctx.dropOnDestroy()) {
-            ItemStack item = type.getTakeOffItem(ctx);
-            if (item != null && !item.getType().isAir()) {
-                cart.getWorld().dropItemNaturally(cart.getLocation(), item);
-            }
+        // 原版 remove() 路径（RemovalReason.KILLED / DISCARDED 的 shouldDestroy() 均为 true）已由
+        // AbstractMinecartContainer#remove 触发 dropContents 掉落内容物，且该实现不清空库存；
+        // 此处清空原版库存，防止 onCartDestroyed 对同一批内容物二次掉落（如第三方 remove() 触发
+        // PLUGIN cause、自然消失触发 DESPAWN cause 等，MockBukkit 不模拟原版掉落故无法覆盖此场景）
+        if (cart instanceof InventoryHolder holder) {
+            holder.getInventory().clear();
         }
-        removeCart(cart.getUniqueId());
+        try {
+            try {
+                type.onCartDestroyed(ctx);
+            } catch (RuntimeException ex) {
+                // 单个类型销毁回调异常只跳过该回调，仍走默认掉落与上下文清理，避免 ctx 残留
+                plugin.getLogger().log(Level.WARNING,
+                        "[PepperMinecart] 矿车类型 " + type.getId() + " onCartDestroyed 异常，已继续默认掉落逻辑: "
+                                + cart.getUniqueId(), ex);
+            }
+            if (ctx.dropOnDestroy()) {
+                ItemStack item = null;
+                try {
+                    item = type.getTakeOffItem(ctx);
+                } catch (RuntimeException ex) {
+                    plugin.getLogger().log(Level.WARNING,
+                            "[PepperMinecart] 矿车类型 " + type.getId() + " getTakeOffItem 异常，已跳过掉落: "
+                                    + cart.getUniqueId(), ex);
+                }
+                if (item != null && !item.getType().isAir()) {
+                    try {
+                        // 统一走 ctx.dropItem：实体 world/location 不可用时自动回退到最后已知快照，
+                        // 避免 EntityRemoveEvent 阶段实体已失效导致默认掉落静默丢失。
+                        ctx.dropItem(item);
+                    } catch (RuntimeException ex) {
+                        // 掉落异常（如世界不可用）只记录，不阻断上下文清理
+                        plugin.getLogger().log(Level.WARNING,
+                                "[PepperMinecart] 矿车类型 " + type.getId() + " 掉落物品异常，已跳过掉落: "
+                                        + cart.getUniqueId(), ex);
+                    }
+                }
+            }
+        } finally {
+            // 无论正常完成/回调异常/掉落异常，都确保不泄漏受管 context
+            removeCart(cart.getUniqueId());
+        }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
-    public void onChunkLoad(ChunkLoadEvent e) {
-        for (Entity entity : e.getChunk().getEntities()) {
-            if (!(entity instanceof Minecart cart)) {
-                continue;
-            }
-            if (!CartData.isManaged(cart)) {
-                continue;
-            }
-            contextOrNull(cart);
-            // 显示校验：仅普通矿车（特殊矿车由实体自身渲染）；存储物品存在但显示缺失（如第三方清除）→ 恢复
-            if (cart.getType() == EntityType.MINECART) {
-                ItemStack item = CartData.getItem(cart);
-                if (item != null && !new CartBlockDisplay(cart).has()) {
-                    new CartBlockDisplay(cart).set(item.getType());
-                    // 显示恢复后重新解析并登记上下文（老数据可能因显示缺失未在首次解析时登记）
-                    contextOrNull(cart);
+    /** 安全遍历区块内矿车：单个矿车处理异常只跳过该矿车，不中断整个区块事件。 */
+    private void forEachMinecartInChunk(Chunk chunk, Consumer<Minecart> action) {
+        for (Entity entity : chunk.getEntities()) {
+            if (entity instanceof Minecart cart) {
+                try {
+                    action.accept(cart);
+                } catch (RuntimeException ex) {
+                    plugin.getLogger().log(Level.WARNING,
+                            "[PepperMinecart] 处理区块矿车异常，已跳过该矿车: " + cart.getUniqueId(), ex);
                 }
             }
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
-    public void onChunkUnload(ChunkUnloadEvent e) {
-        for (Entity entity : e.getChunk().getEntities()) {
-            if (entity instanceof Minecart cart) {
-                // 回写并关闭该矿车仍打开中的容器界面（卸载后实体脱离，无法再安全写回）；
-                // 移除上下文跟踪（投掷器冷却存 PDC，随实体保存，无需在此清理）
-                flushCartSessions(cart);
-                removeCart(cart.getUniqueId());
+    /** 登记单个受管矿车：解析 context，并保留 ChunkLoad 的显示一致性处理。 */
+    private void registerManagedCart(Minecart cart) {
+        if (!CartData.isManaged(cart)) {
+            return;
+        }
+        contextOrNull(cart);
+        // 显示校验：仅普通矿车（特殊矿车由实体自身渲染）；存储物品存在但显示缺失 → 恢复。
+        // 仅对方块材质恢复显示：非方块 ITEM（数据损坏/API 写入异常数据）直接跳过，
+        // 避免 setDisplayBlockData(createBlockData) 抛 IllegalArgumentException 打断区块遍历
+        if (cart.getType() == EntityType.MINECART) {
+            ItemStack item = CartData.getItem(cart);
+            if (item != null && item.getType().isBlock() && !new CartBlockDisplay(cart).has()) {
+                try {
+                    new CartBlockDisplay(cart).set(item.getType());
+                    // 显示恢复后重新解析并登记上下文（老数据可能因显示缺失未在首次解析时登记）
+                    contextOrNull(cart);
+                } catch (RuntimeException ex) {
+                    // 显示恢复失败（如数据异常）：矿车仍按 PDC 保持受管（tick/销毁兜底仍生效），
+                    // 仅记录并跳过显示恢复，不让异常扩散到整个区块遍历
+                    plugin.getLogger().log(Level.WARNING,
+                            "[PepperMinecart] 恢复矿车显示方块失败，已跳过: " + cart.getUniqueId(), ex);
+                }
             }
         }
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onChunkLoad(ChunkLoadEvent e) {
+        forEachMinecartInChunk(e.getChunk(), this::registerManagedCart);
+    }
+
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
+    public void onChunkUnload(ChunkUnloadEvent e) {
+        forEachMinecartInChunk(e.getChunk(), cart -> {
+            // 回写并关闭该矿车仍打开中的容器界面（卸载后实体脱离，无法再安全写回）；
+            // 移除上下文跟踪（投掷器冷却存 PDC，随实体保存，无需在此清理）
+            try {
+                flushCartSessions(cart);
+            } finally {
+                removeCart(cart.getUniqueId());
+            }
+        });
     }
 }

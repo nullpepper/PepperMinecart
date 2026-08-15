@@ -66,12 +66,15 @@ public class PepperMinecartPlugin extends JavaPlugin {
         engine.setSessionManager(sessions);
 
         // 内置矿车类型（全部实现 CartTypeHandler）
-        registry.register(new GenericBlockHandler());
+        registry.register(GenericBlockHandler.INSTANCE);
         registry.register(new SpecialCartHandler());
         registry.register(new ContainerHandler(sessions));
         registry.register(new WorkstationHandler(sessions));
         registry.register(new AnvilHandler(sessions));
         registry.register(new DispenserCartHandler(config, sessions));
+
+        // 存量受管矿车：插件启用前已加载的区块不会再触发 ChunkLoadEvent，需主动扫描
+        engine.registerLoadedCarts();
 
         // 引擎与监听器
         engine.start();

@@ -2,6 +2,7 @@ package com.pepperminecart.impl;
 
 import com.pepperminecart.api.CartContext;
 import com.pepperminecart.api.CartTypeHandler;
+import com.pepperminecart.api.TakeOffResult;
 import com.pepperminecart.config.PluginConfig;
 import com.pepperminecart.display.CartBlockDisplay;
 import com.pepperminecart.engine.CartEngine;
@@ -28,12 +29,29 @@ public class CartContextImpl implements CartContext {
     private Minecart cart;
     private final CartTypeHandler type;
     private boolean dropOnDestroy = true;
+    /** 实体可能已失效时仍可安全掉落的位置快照（销毁/卸载等回调前由引擎刷新）。 */
+    private World lastWorld;
+    private Location lastLocation;
 
     public CartContextImpl(CartEngine engine, PluginConfig config, Minecart cart, CartTypeHandler type) {
         this.engine = engine;
         this.config = config;
         this.cart = cart;
         this.type = type;
+    }
+
+    /** 更新最后已知有效位置；供引擎在实体移除/销毁回调前调用，避免 handler 依赖已失效实体。
+     *  仅在拿到有效位置时更新，避免实体已失效时用 null 覆盖旧快照。 */
+    public void updateSnapshot(World world, Location location) {
+        if (world != null && location != null) {
+            this.lastWorld = world;
+            this.lastLocation = location;
+        }
+    }
+
+    /** 返回最后已知有效位置；实体已失效且无法取得当前位置时供引擎回退使用。 */
+    public Location lastLocation() {
+        return lastLocation;
     }
 
     @Override
@@ -168,12 +186,21 @@ public class CartContextImpl implements CartContext {
 
     @Override
     public void giveItem(Player player, ItemStack item) {
+        giveItem(player, item, config.takeOffMode());
+    }
+
+    /** 引擎内部按本次实际取下策略分发，避免绕过调用方传入的 mode。 */
+    public void giveItem(Player player, ItemStack item, TakeOffResult mode) {
         if (item == null || item.getType().isAir()) {
             return;
         }
-        switch (config.takeOffMode()) {
+        switch (mode) {
             case INVENTORY -> giveOrDrop(player, item);
-            default -> dropItem(item); // DROP / DISABLED（安全兜底）
+            case DROP -> dropItem(item);
+            case DISABLED -> {
+                // 禁止取下：不交付任何物品。正常交互路径在进入 takeOff 前已拦截（InteractionListener），
+                // 此处为 API 直接调用/处理器误用时的防御：既不入背包也不落地
+            }
         }
     }
 
@@ -183,10 +210,16 @@ public class CartContextImpl implements CartContext {
             return;
         }
         World world = cart.getWorld();
-        if (world == null) {
-            return; // 实体已移除且世界不可用（防御；正常路径取下前已 repoint 到有效实体）
+        Location loc = cart.getLocation();
+        if (world == null || loc == null) {
+            // 实体已移除/失效时回退到最后已知位置，避免销毁回调静默丢失掉落
+            world = lastWorld;
+            loc = lastLocation;
         }
-        world.dropItemNaturally(cart.getLocation(), item);
+        if (world == null || loc == null) {
+            return; // 仍无可用位置，只能放弃（防御）
+        }
+        world.dropItemNaturally(loc, item);
     }
 
     @Override
@@ -203,12 +236,23 @@ public class CartContextImpl implements CartContext {
                 newCart.addPassenger(passenger);
             }
         }
+        // 显示方块/偏移是矿车实体属性，实体替换时应一并迁移
+        BlockData displayData = cart.getDisplayBlockData();
+        if (displayData != null && !displayData.getMaterial().isAir()) {
+            newCart.setDisplayBlockData(displayData);
+        }
+        newCart.setDisplayBlockOffset(cart.getDisplayBlockOffset());
         engine.rebind(cart.getUniqueId(), newCart);
         // 旧实体已退休：清空本插件 PDC 与显示，防止其随后 remove() 时被 onEntityRemove
         // 重新解析为受管矿车造成双重掉落（第三方在 onTakeOff 中调用 replaceEntity 后尤其需要）
-        CartData.clear(cart);
+        CartData.clear(cart, type.getId().getNamespace());
         new CartBlockDisplay(cart).clear();
         cart = newCart;
+        World world = newCart.getWorld();
+        Location loc = newCart.getLocation();
+        if (world != null && loc != null) {
+            updateSnapshot(world, loc);
+        }
     }
 
     /**
@@ -225,6 +269,15 @@ public class CartContextImpl implements CartContext {
         this.dropOnDestroy = drop;
     }
 
+    @Override
+    public void releaseCart() {
+        // HANDLED 取下路径的清理助手：清除插件 PDC/显示并解除引擎跟踪，
+        // 使矿车还原为空车（等效于引擎默认取下流程对普通矿车的清理）
+        engine.removeCart(cart);
+        CartData.clear(cart, type.getId().getNamespace());
+        new CartBlockDisplay(cart).clear();
+    }
+
     public boolean dropOnDestroy() {
         return dropOnDestroy;
     }
@@ -235,12 +288,18 @@ public class CartContextImpl implements CartContext {
             return;
         }
         World world = cart.getWorld();
-        if (world == null) {
-            return; // 实体已移除且世界不可用（防御）
+        Location loc = cart.getLocation();
+        if (world == null || loc == null) {
+            // 实体已移除/失效时回退到最后已知位置，避免溢出物品静默丢失
+            world = lastWorld;
+            loc = lastLocation;
+        }
+        if (world == null || loc == null) {
+            return; // 仍无可用位置，只能放弃（防御）
         }
         for (ItemStack rest : left.values()) {
             if (rest != null && !rest.getType().isAir()) {
-                world.dropItemNaturally(cart.getLocation(), rest);
+                world.dropItemNaturally(loc, rest);
             }
         }
     }
