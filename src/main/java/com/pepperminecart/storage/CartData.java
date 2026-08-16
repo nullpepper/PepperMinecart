@@ -53,6 +53,9 @@ public final class CartData {
     // ---- 整物品存储 ----
 
     public static void setItem(Minecart cart, ItemStack item) {
+        if (item == null) {
+            throw new IllegalArgumentException("存储物品不能为 null（清除请使用 clearItem）");
+        }
         setBytes(cart, ITEM, item.serializeAsBytes());
     }
 
@@ -68,7 +71,8 @@ public final class CartData {
             // getItem 处于 resolve() 调用链上，反序列化异常若传播会中断事件链路
             // （销毁处理中断、context 泄漏、物品不返还）
             Bukkit.getLogger().log(java.util.logging.Level.WARNING,
-                    "[PepperMinecart] 矿车存储物品数据损坏，已按缺失处理: " + cart.getUniqueId(), ex);
+                    "[PepperMinecart] 矿车存储物品数据损坏，已按缺失处理并清除损坏键: " + cart.getUniqueId(), ex);
+            clearItem(cart);
             return null;
         }
     }
@@ -80,6 +84,9 @@ public final class CartData {
     // ---- 原始材质 ----
 
     public static void setOriginalMaterial(Minecart cart, Material material) {
+        if (material == null) {
+            throw new IllegalArgumentException("原始材质不能为 null");
+        }
         setString(cart, ORIGINAL, material.name());
     }
 
@@ -91,7 +98,12 @@ public final class CartData {
     // ---- 通用 PDC 访问（任意 NamespacedKey，供扩展类型使用） ----
 
     public static void setString(Minecart cart, NamespacedKey key, String value) {
-        cart.getPersistentDataContainer().set(key, PersistentDataType.STRING, value);
+        PersistentDataContainer pdc = cart.getPersistentDataContainer();
+        if (value == null) {
+            pdc.remove(key); // PDC 不接受 null：显式按“删除键”语义处理，避免调用方猜 NPE
+            return;
+        }
+        pdc.set(key, PersistentDataType.STRING, value);
     }
 
     public static String getString(Minecart cart, NamespacedKey key) {
@@ -115,7 +127,12 @@ public final class CartData {
     }
 
     public static void setBytes(Minecart cart, NamespacedKey key, byte[] value) {
-        cart.getPersistentDataContainer().set(key, PersistentDataType.BYTE_ARRAY, value);
+        PersistentDataContainer pdc = cart.getPersistentDataContainer();
+        if (value == null) {
+            pdc.remove(key); // 与 setString 一致：null 表示删除键
+            return;
+        }
+        pdc.set(key, PersistentDataType.BYTE_ARRAY, value);
     }
 
     public static byte[] getBytes(Minecart cart, NamespacedKey key) {
@@ -134,9 +151,21 @@ public final class CartData {
      *  扩展元数据应使用与 {@code CartTypeHandler.getId()} 相同的 namespace，
      *  这样取下/销毁/报废时能随矿车数据一起清除，避免旧状态残留到下一次使用。 */
     public static void clear(Minecart cart, String... extraNamespaces) {
+        if (extraNamespaces == null) {
+            throw new IllegalArgumentException("extraNamespaces 不能为 null");
+        }
         PersistentDataContainer pdc = cart.getPersistentDataContainer();
         Set<String> namespaces = new HashSet<>(Set.of("pepperminecart"));
-        Collections.addAll(namespaces, extraNamespaces);
+        for (String namespace : extraNamespaces) {
+            if (namespace == null) {
+                throw new IllegalArgumentException("extraNamespaces 不能包含 null");
+            }
+            if ("minecraft".equals(namespace) || "bukkit".equals(namespace)) {
+                throw new IllegalArgumentException("拒绝清理公共命名空间 " + namespace
+                        + "：这可能删除原版/其他插件的 PDC 数据");
+            }
+            namespaces.add(namespace);
+        }
         for (NamespacedKey k : new ArrayList<>(pdc.getKeys())) {
             if (namespaces.contains(k.getNamespace())) {
                 pdc.remove(k);
