@@ -27,7 +27,7 @@ public final class MinecartSwap {
         if (loc == null) {
             throw new IllegalStateException("矿车不在世界中，无法捕获运动状态: " + cart.getUniqueId());
         }
-        return new Motion(loc, cart.getVelocity(), loc.getYaw(), loc.getPitch());
+        return new Motion(loc.clone(), cart.getVelocity(), loc.getYaw(), loc.getPitch());
     }
 
     /** 把运动状态应用到目标矿车。 */
@@ -46,7 +46,7 @@ public final class MinecartSwap {
         if (world == null) {
             throw new IllegalStateException("运动快照中的世界不可用，无法生成替代矿车");
         }
-        T replacement = world.spawn(motion.location(), type);
+        T replacement = world.spawn(motion.location().clone(), type);
         if (replacement == null) {
             throw new IllegalStateException("生成替代矿车失败: " + type.getSimpleName());
         }

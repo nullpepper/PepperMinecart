@@ -22,7 +22,10 @@ public interface CartTypeHandler {
     /** 唯一类型 id（命名空间建议使用所属插件的 namespace，避免跨插件冲突）。 */
     NamespacedKey getId();
 
-    /** 放置这些方块时触发本类型；返回空集表示该类型只能通过 API 创建。 */
+    /**
+     * 放置这些方块时触发本类型；返回空集表示该类型只能通过 API 创建。
+     * 必须返回非 null、不含 null 元素、且调用方不应修改的集合。
+     */
     Set<Material> handledMaterials();
 
     /** 是否允许在该矿车上放置。 */

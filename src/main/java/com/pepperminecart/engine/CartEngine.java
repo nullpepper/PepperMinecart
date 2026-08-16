@@ -366,6 +366,13 @@ public class CartEngine implements Listener {
                 return;
             }
             if (outcome == TakeOffOutcome.HANDLED) {
+                // HANDLED 处理器若未写 PDC（外来原版矿车的临时 context），不得泄漏在受管集合：
+                // 否则矿车被永久禁乘/每 tick 回调/销毁误掉落
+                if (!CartData.isManaged(cart)) {
+                    plugin.getLogger().warning("[PepperMinecart] HANDLED 取下未写 PDC，已移除临时 context: "
+                            + cart.getUniqueId());
+                    removeCart(cart.getUniqueId());
+                }
                 handled = true;
                 return;
             }
@@ -444,9 +451,14 @@ public class CartEngine implements Listener {
             }
             // 交给 ItemDelivery 按本次取下策略统一分发（背包优先、溢出落地；DROP 直接落地），
             // 交付失败（掉落被取消/无位置）如实上报，避免把“已交付”当事实
-            if (!ctx.deliverItem(player, item, mode)) {
-                plugin.getLogger().warning("[PepperMinecart] 取下物品交付失败（掉落可能被其他插件取消或位置不可用）: "
-                        + cart.getUniqueId());
+            try {
+                if (!ctx.deliverItem(player, item, mode)) {
+                    plugin.getLogger().warning("[PepperMinecart] 取下物品交付失败（掉落可能被其他插件取消或位置不可用）: "
+                            + cart.getUniqueId());
+                }
+            } catch (RuntimeException ex) {
+                plugin.getLogger().log(Level.WARNING,
+                        "[PepperMinecart] 取下物品交付异常: " + cart.getUniqueId(), ex);
             }
 
             if (config.soundTakeOff() && loc != null && loc.getWorld() != null) {
@@ -591,7 +603,15 @@ public class CartEngine implements Listener {
         if (ctx == null) {
             return;
         }
-        if (!ctx.getType().allowRiding()) {
+        boolean allowRiding;
+        try {
+            allowRiding = ctx.getType().allowRiding();
+        } catch (RuntimeException ex) {
+            plugin.getLogger().log(Level.WARNING,
+                    "[PepperMinecart] 矿车类型 " + ctx.getType().getId() + " allowRiding 异常，按禁止乘坐处理", ex);
+            allowRiding = false;
+        }
+        if (!allowRiding) {
             e.setCancelled(true);
             return;
         }

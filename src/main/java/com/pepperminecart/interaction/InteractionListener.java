@@ -142,12 +142,16 @@ public class InteractionListener implements Listener {
             // 非潜行交互只对真正受管（有插件 PDC）的矿车生效：contextFor 会无条件登记上下文，
             // 若用于仅显示方块/第三方数据的矿车会把外车"收养"进受管集合（禁乘/错误掉落）。
             // contextOrNull 只在 PDC 受管时登记/复用上下文，显示-only 矿车直接放行原版行为。
+            ctx = engine.contextOrNull(cart);
+            if (ctx == null) {
+                // 仅显示方块/第三方数据的矿车不受管：直接放行原版行为，不消耗冷却
+                return;
+            }
             if (!cooldown.tryUse(player)) {
                 e.setCancelled(true);
                 return;
             }
-            ctx = engine.contextOrNull(cart);
-            if (ctx != null && engine.safeInteract(player, ctx)) {
+            if (engine.safeInteract(player, ctx)) {
                 e.setCancelled(true);
             }
         }
@@ -219,7 +223,8 @@ public class InteractionListener implements Listener {
         Material material = hand.getType();
         CartTypeHandler type = registry.byMaterial(material);
         if (type == null) {
-            type = registry.byId(GenericBlockHandler.ID);
+            // 兜底类型可能被公开 API 注销，直接使用单例而不是查注册表
+            type = GenericBlockHandler.INSTANCE;
         }
         ItemStack placed = hand.clone();
         placed.setAmount(1);
@@ -271,7 +276,9 @@ public class InteractionListener implements Listener {
                     }
                 }
             } catch (RuntimeException rollbackEx) {
-                // 回滚失败（如实体已被替换/移除）时不再抛出，避免掩盖原始异常
+                // 回滚失败（如实体已被替换/移除）不再抛出，但必须留日志，否则幽灵矿车无从排查
+                plugin.getLogger().log(Level.WARNING,
+                        "[PepperMinecart] 放置方块回滚未完全成功，请检查矿车残留数据", rollbackEx);
             }
             return;
         }

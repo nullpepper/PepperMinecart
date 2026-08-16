@@ -52,6 +52,9 @@ public class CartSessionManager implements Listener {
      * 编辑即时生效；返回 null 表示物品不是容器（调用方应视为不可交互）。
      */
     public Inventory openContainer(Player player, Minecart cart, ItemStack blockItem) {
+        if (blockItem == null) {
+            return null;
+        }
         if (!(blockItem.getItemMeta() instanceof BlockStateMeta bsm)) {
             return null;
         }
