@@ -520,6 +520,37 @@ class MinecartFlowTest {
 
     // ---- 审查回归：特殊矿车保留原方块物品的 ItemMeta ----
 
+    /**
+     * 回归：DO_ENTITY_DROPS=true 时受管特殊矿车死亡不得走“外来原版矿车”跳过分支——
+     * 模板 ItemMeta（自定义名/Lore/命令）由插件确定性掉落，内容物也不得丢失。
+     */
+    @Test
+    void destroy_deathWithDropsTrue_managedSpecialCartDropsTemplateAndContents() {
+        PlayerMock player = server.addPlayer();
+        RideableMinecart cart = spawnCart();
+        player.setSneaking(true);
+        ItemStack namedChest = new ItemStack(Material.CHEST);
+        ItemMeta meta = namedChest.getItemMeta();
+        meta.displayName(Component.text("宝藏箱"));
+        namedChest.setItemMeta(meta);
+        player.getInventory().setItemInMainHand(namedChest);
+        interact(player, cart);
+
+        StorageMinecart converted = world.getEntities().stream()
+                .filter(en -> en instanceof StorageMinecart)
+                .map(en -> (StorageMinecart) en)
+                .findFirst().orElseThrow();
+        converted.getInventory().setItem(0, new ItemStack(Material.DIAMOND, 3));
+
+        world.setGameRule(org.bukkit.GameRule.DO_ENTITY_DROPS, true);
+        server.getPluginManager().callEvent(new EntityRemoveEvent(converted, EntityRemoveEvent.Cause.DEATH));
+
+        List<Item> chestDrops = droppedItems(Material.CHEST);
+        assertEquals(1, chestDrops.size(), "受管特殊矿车死亡应掉落方块模板一次");
+        assertTrue(chestDrops.get(0).getItemStack().getItemMeta().hasDisplayName(), "掉落模板应保留自定义名");
+        assertEquals(1, droppedItems(Material.DIAMOND).size(), "内容物应由插件确定性掉落一次");
+    }
+
     @Test
     void takeOff_specialCartPreservesItemMeta() {
         PlayerMock player = server.addPlayer();

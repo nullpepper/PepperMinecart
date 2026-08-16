@@ -443,8 +443,9 @@ public class CartEngine implements Listener {
                 loc.getWorld().playSound(loc, Sound.BLOCK_STONE_BREAK, 1f, 1f);
             }
         } finally {
-            // 非 HANDLED 路径无论正常完成/提前取消/实体失效，都确保不泄漏受管 context
-            if (!handled) {
+            // 非 HANDLED 路径：只有在矿车数据已清空/临时登记时移除 context。
+            // 提前取消且 PDC 仍在（getTakeOffItem 失败等）时保留跟踪，静止矿车也不会失去 tick 回调。
+            if (!handled && !CartData.isManaged(cart)) {
                 removeCart(cart.getUniqueId());
             }
         }
@@ -667,21 +668,28 @@ public class CartEngine implements Listener {
                     "[PepperMinecart] 矿车销毁时回写/关闭会话异常: " + cart.getUniqueId(), ex);
         }
         CartTypeHandler type = ctx.getType();
-        // 原版特殊矿车（箱子/漏斗/熔炉/TNT/命令）的实体死亡路径（DEATH 且实体掉落开启）已由服务端
-        // 按原版设计掉落“合并物品（Minecart with Chest 等）+ 内容物”（并清空原版库存），
-        // 插件刻意跳过处理器补掉逻辑，避免与原版掉落重复；
-        // 其余路径（第三方 remove()/DISCARD/DESPAWN/PLUGIN 等）不预清空原版库存——这里不依赖
-        // Paper 内部 dropContents 是否触发，而是由 onCartDestroyed 的处理器（SpecialCartHandler
-        // 逐格掉落 + clear + setDropOnDestroy(false)）确定性接管内容物处置，既防丢失也防二次掉落。
+        // 死亡掉落判定：实体可能已脱离世界（getWorld 为 null），此时回退到最后已知世界快照，
+        // 避免“判定不到原版掉落”导致插件又掉一份、玩家拿双份。
+        World ruleWorld = world != null ? world : ctx.lastWorld();
         boolean vanillaDeathDropped = e.getCause() == EntityRemoveEvent.Cause.DEATH
-                && world != null && Boolean.TRUE.equals(world.getGameRuleValue(GameRule.DO_ENTITY_DROPS));
-        if (vanillaDeathDropped && isVanillaCart(cart)) {
+                && ruleWorld != null && Boolean.TRUE.equals(ruleWorld.getGameRuleValue(GameRule.DO_ENTITY_DROPS));
+        // 外来原版特殊矿车（无插件 PDC）死亡且原版掉落开启：原版已按设计掉落合并物品+内容物，
+        // 插件跳过处理器补掉，避免重复掉落。
+        if (vanillaDeathDropped && isVanillaCart(cart) && !CartData.isManaged(cart)) {
             ctx.setDropOnDestroy(false);
+            removeCart(cart.getUniqueId());
+            return;
+        }
+        // 受管特殊矿车死亡且实体已脱离世界（事件晚于原版掉落）：原版掉落已经发生，
+        // 插件再掉模板会复制矿车物品。模板 ItemMeta 无法安全补发，只清理上下文，不二次掉落。
+        if (vanillaDeathDropped && isVanillaCart(cart) && CartData.isManaged(cart) && world == null) {
             removeCart(cart.getUniqueId());
             return;
         }
         try {
             try {
+                // 受管特殊矿车死亡（实体尚在世界）走处理器：模板 ItemMeta/内容物由插件确定性掉落；
+                // onCartDestroyed 内部会清空原版库存并 setDropOnDestroy(false)，防止原版再掉一份。
                 type.onCartDestroyed(ctx);
             } catch (RuntimeException ex) {
                 // 单个类型销毁回调异常只跳过该回调，仍走默认掉落与上下文清理，避免 ctx 残留
