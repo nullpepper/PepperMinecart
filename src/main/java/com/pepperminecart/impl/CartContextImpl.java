@@ -259,34 +259,43 @@ public class CartContextImpl implements CartContext {
     public void replaceEntity(Minecart newCart) {
         // 第一步先记录替换产物：后续任何步骤抛异常时，放置回滚仍能通过 lastReplacement() 回收该实体
         this.lastReplacement = newCart;
-        CartData.copy(cart, newCart);
-        // 迁移自定义名与可见性，尽力转移乘客（removePassenger 被取消时乘客留在旧矿车，
-        // 旧矿车随后 remove() 会由服务端正常弹出，不强行转移）
-        if (cart.customName() != null) {
-            newCart.customName(cart.customName());
-            newCart.setCustomNameVisible(cart.isCustomNameVisible());
-        }
-        for (Entity passenger : new ArrayList<>(cart.getPassengers())) {
-            if (cart.removePassenger(passenger)) {
-                newCart.addPassenger(passenger);
+        try {
+            CartData.copy(cart, newCart);
+            // 迁移自定义名与可见性，尽力转移乘客（removePassenger 被取消时乘客留在旧矿车，
+            // 旧矿车随后 remove() 会由服务端正常弹出，不强行转移）
+            if (cart.customName() != null) {
+                newCart.customName(cart.customName());
+                newCart.setCustomNameVisible(cart.isCustomNameVisible());
             }
-        }
-        // 显示方块/偏移是矿车实体属性，实体替换时应一并迁移
-        BlockData displayData = cart.getDisplayBlockData();
-        if (displayData != null && !displayData.getMaterial().isAir()) {
-            newCart.setDisplayBlockData(displayData);
-        }
-        newCart.setDisplayBlockOffset(cart.getDisplayBlockOffset());
-        engine.rebind(cart.getUniqueId(), newCart);
-        // 旧实体已退休：清空本插件 PDC 与显示，防止其随后 remove() 时被 onEntityRemove
-        // 重新解析为受管矿车造成双重掉落（第三方在 onTakeOff 中调用 replaceEntity 后尤其需要）
-        CartData.clear(cart, type.getId().getNamespace());
-        new CartBlockDisplay(cart).clear();
-        cart = newCart;
-        World world = newCart.getWorld();
-        Location loc = newCart.getLocation();
-        if (world != null && loc != null) {
-            updateSnapshot(world, loc);
+            for (Entity passenger : new ArrayList<>(cart.getPassengers())) {
+                if (cart.removePassenger(passenger) && !newCart.addPassenger(passenger) && cart.isValid()) {
+                    // 新实体拒绝承载时把乘客放回旧实体，避免乘客被丢在中间状态
+                    cart.addPassenger(passenger);
+                }
+            }
+            // 显示方块/偏移是矿车实体属性，实体替换时应一并迁移
+            BlockData displayData = cart.getDisplayBlockData();
+            if (displayData != null && !displayData.getMaterial().isAir()) {
+                newCart.setDisplayBlockData(displayData);
+            }
+            newCart.setDisplayBlockOffset(cart.getDisplayBlockOffset());
+            engine.rebind(cart.getUniqueId(), newCart);
+            // 旧实体已退休：清空本插件 PDC 与显示，防止其随后 remove() 时被 onEntityRemove
+            // 重新解析为受管矿车造成双重掉落（第三方在 onTakeOff 中调用 replaceEntity 后尤其需要）
+            CartData.clear(cart, type.getId().getNamespace());
+            new CartBlockDisplay(cart).clear();
+            cart = newCart;
+            World world = newCart.getWorld();
+            Location loc = newCart.getLocation();
+            if (world != null && loc != null) {
+                updateSnapshot(world, loc);
+            }
+        } catch (RuntimeException ex) {
+            // 事务回滚：清除已复制到替代实体的插件 PDC/显示，避免新旧两个实体都带业务数据；
+            // 替代实体本身由外层放置回滚（lastReplacement）统一移除。
+            CartData.clear(newCart, type.getId().getNamespace());
+            new CartBlockDisplay(newCart).clear();
+            throw ex;
         }
     }
 

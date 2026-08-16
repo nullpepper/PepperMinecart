@@ -144,8 +144,12 @@ public final class CartData {
         }
     }
 
-    /** 实体替换时整 PDC 复制（含扩展类型写入的元数据）。 */
+    /**
+     * 实体替换时整 PDC 复制（含扩展类型写入的元数据）。
+     * replace=false：不覆盖目标实体已存在的键，避免清空其他插件写在目标实体上的数据。
+     * 约定目标实体必须是新建实体，因此插件自己的键不会产生陈旧覆盖。
+     */
     public static void copy(Minecart from, Minecart to) {
-        from.getPersistentDataContainer().copyTo(to.getPersistentDataContainer(), true);
+        from.getPersistentDataContainer().copyTo(to.getPersistentDataContainer(), false);
     }
 }
