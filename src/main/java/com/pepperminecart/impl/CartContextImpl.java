@@ -32,6 +32,9 @@ public class CartContextImpl implements CartContext {
     /** 实体可能已失效时仍可安全掉落的位置快照（销毁/卸载等回调前由引擎刷新）。 */
     private World lastWorld;
     private Location lastLocation;
+    /** 最近一次 replaceEntity 的替换产物：即使替换中途异常（尚未重定向 cart），
+     *  调用方也能据此精确回收已生成的替代实体，避免带 PDC 的幽灵矿车泄漏。 */
+    private Minecart lastReplacement;
 
     public CartContextImpl(CartEngine engine, PluginConfig config, Minecart cart, CartTypeHandler type) {
         this.engine = engine;
@@ -52,6 +55,17 @@ public class CartContextImpl implements CartContext {
     /** 返回最后已知有效位置；实体已失效且无法取得当前位置时供引擎回退使用。 */
     public Location lastLocation() {
         return lastLocation;
+    }
+
+    /** 返回最后已知有效世界；实体已失效时供引擎回退使用。 */
+    public World lastWorld() {
+        return lastWorld;
+    }
+
+    /** 最近一次 {@link #replaceEntity} 接收/生成的实体（放置回滚清理用）。
+     *  替换中途抛异常时尚未重定向，本字段与 getMinecart() 可能指向不同实体。 */
+    public Minecart lastReplacement() {
+        return lastReplacement;
     }
 
     @Override
@@ -126,8 +140,8 @@ public class CartContextImpl implements CartContext {
             if (item.getItemMeta() instanceof BlockStateMeta) {
                 return;
             }
-            ItemStack updated = item.clone();
-            updated.setType(material);
+            // withType 保留其余 ItemMeta（setType 已弃用）
+            ItemStack updated = item.withType(material);
             CartData.setItem(cart, updated);
         }
     }
@@ -174,18 +188,30 @@ public class CartContextImpl implements CartContext {
 
     @Override
     public void setCooldown(NamespacedKey key, int ticks) {
-        // 世界年龄驱动（World#getFullTime：单调递增、跨区块卸载/重启持久、不受 /time set 与
-        // 系统时钟影响；随实体 PDC 保存，实体替换时随 PDC 一并复制）——与引擎调度语义一致
-        CartData.setLong(cart, key, cart.getWorld().getFullTime() + Math.max(0, ticks));
+        // 世界年龄驱动（World#getGameTime：level.dat GameTime，单调递增、跨区块卸载/重启持久、
+        // 不受 /time set 与系统时钟影响；随实体 PDC 保存，实体替换时随 PDC 一并复制）——与引擎调度语义一致。
+        // 注意不能用 getFullTime()：它对应 DayTime，/time set 与 /time add 会直接改写它，
+        // 时间回拨会让冷却长期不结束、快拨则瞬间到期
+        World world = cart.getWorld();
+        if (world == null) {
+            return; // 实体已移除/区块卸载：无世界老化参考，跳过设置（避免 NPE，下次有效时再设）
+        }
+        CartData.setLong(cart, key, world.getGameTime() + Math.max(0, ticks));
     }
 
     @Override
     public boolean hasCooldown(NamespacedKey key) {
-        return cart.getWorld().getFullTime() < CartData.getLong(cart, key, 0L);
+        World world = cart.getWorld();
+        if (world == null) {
+            return false; // 实体已失效无法判定，视为无冷却
+        }
+        return world.getGameTime() < CartData.getLong(cart, key, 0L);
     }
 
     @Override
     public void giveItem(Player player, ItemStack item) {
+        // 注意：此公开入口按全局 take-off-mode 分发；取下流程内部应使用引擎的三参重载
+        // giveItem(player, item, mode) 以遵循本次实际策略（如容器 DROP 策略）
         giveItem(player, item, config.takeOffMode());
     }
 
@@ -224,6 +250,8 @@ public class CartContextImpl implements CartContext {
 
     @Override
     public void replaceEntity(Minecart newCart) {
+        // 第一步先记录替换产物：后续任何步骤抛异常时，放置回滚仍能通过 lastReplacement() 回收该实体
+        this.lastReplacement = newCart;
         CartData.copy(cart, newCart);
         // 迁移自定义名与可见性，尽力转移乘客（removePassenger 被取消时乘客留在旧矿车，
         // 旧矿车随后 remove() 会由服务端正常弹出，不强行转移）

@@ -12,6 +12,7 @@ import com.pepperminecart.impl.CartContextImpl;
 import com.pepperminecart.registry.CartTypeRegistry;
 import com.pepperminecart.registry.handler.GenericBlockHandler;
 import com.pepperminecart.storage.CartData;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.UUID;
@@ -111,7 +112,10 @@ public class CartEngine implements Listener {
                     }
                     return handler;
                 }
-            } catch (IllegalArgumentException ignored) {
+            } catch (IllegalArgumentException ex) {
+                // PDC cart-type 被第三方写入非法字符串时记录日志，便于排查“矿车不按预期路由”
+                plugin.getLogger().warning("[PepperMinecart] 矿车 PDC cart-type 含非法 NamespacedKey，已走回退解析: "
+                        + id + " (" + cart.getUniqueId() + ")");
             }
             // 类型已失效：若实体本身是原版特殊矿车（箱子/漏斗等），仍交给支持它的处理器安全接管；
             // 否则回退通用处理器，至少能按存储物品/原始材质/显示材质取下或掉落，避免数据丢失。
@@ -223,13 +227,18 @@ public class CartEngine implements Listener {
             // 同一矿车的类型被覆盖/重注册后，旧 context 仍持有旧 handler；这里重建以使用最新类型。
             // 但若解析结果只是“未知/失效类型”的通用兜底，则保留已有 context，
             // 避免正在使用的旧类型被临时注销时被打断。
-            ctx = new CartContextImpl(this, config, cart, type);
+            // 用对象身份比较：同 id 但不同实例（重注册替换 handler）也应刷新为新实例（EngineStateFixTest）。
+            CartContextImpl rebuilt = new CartContextImpl(this, config, cart, type);
+            // 迁移旧 context 的运行时状态：掉落位置快照与销毁掉落开关不能随重建静默重置
+            rebuilt.updateSnapshot(ctx.lastWorld(), ctx.lastLocation());
+            rebuilt.setDropOnDestroy(ctx.dropOnDestroy());
             World world = cart.getWorld();
             Location loc = cart.getLocation();
             if (world != null && loc != null) {
-                ctx.updateSnapshot(world, loc);
+                rebuilt.updateSnapshot(world, loc);
             }
-            contexts.put(cart.getUniqueId(), ctx);
+            contexts.put(cart.getUniqueId(), rebuilt);
+            ctx = rebuilt;
         }
         return ctx;
     }
@@ -312,8 +321,11 @@ public class CartEngine implements Listener {
         if (mode == TakeOffResult.DISABLED) {
             // 禁止取下：不还原矿车、不交付物品。正常路径由 InteractionListener 前置拦截，
             // 这里防御 API 直接调用（配置为 DISABLED 或容器策略 FORBIDDEN 时不应执行取下流程）。
-            // 注意：若调用方刚用 contextFor 登记了临时 context，需自行移除（引擎无法区分
-            // 临时 context 与常驻 context，取下未发生时不改动受管状态）。
+            // 若调用方刚用 contextFor 登记了临时 context（非 PDC 常驻矿车），取下未发生时应移除，
+            // 防止残留受管集合（禁止乘坐/每 tick 回调/销毁误判）；常驻受管矿车（有 PDC）保留跟踪。
+            if (!CartData.isManaged(cart)) {
+                removeCart(cart.getUniqueId());
+            }
             return;
         }
         // 提前记录位置快照：即使实体在流程中失效，后续 giveItem/dropItem 仍有可用的掉落位置
@@ -387,13 +399,12 @@ public class CartEngine implements Listener {
                     // 再解除管理并清数据、移除实体，防止 EntityRemoveEvent 把旧矿车误判为销毁而重复掉落
                     removeCart(current);
                     CartData.clear(current, ctx.getType().getId().getNamespace());
-                    // 内容物已由 getTakeOffItem 组装进返还物品：先清空原版库存再移除实体。
-                    // Paper 的 Entity#remove() 走 RemovalReason.DISCARDED（shouldDestroy()==true），
-                    // AbstractMinecartContainer#remove 会触发原版 dropContents 把内容物再次掉到地面，
-                    // 与返还物品中嵌入的内容物构成复制。
-                    if (current instanceof InventoryHolder holder) {
-                        holder.getInventory().clear();
-                    }
+                    // 显式处置原版库存内容物后再移除实体——不依赖 Paper 内部 dropContents：
+                    // 若返还物品已内嵌容器内容（BlockStateMeta 的 inventory），则清空原版库存是安全的
+                    // （内容已转移到返还物品）；否则（返还物品未内嵌内容：DROP 策略已倾倒或异常路径）
+                    // 必须先把原版库存逐格掉落，绝不能静默丢失。清空后再 remove()，即便 Paper 随后
+                    // 触发原版 dropContents 也读到空库存，不会二次掉落。
+                    drainOrClearVanillaInventory(item, current, loc);
                     current.remove();
                     // 上下文重定向到新普通矿车：后续 giveItem/dropItem 落在有效实体上（旧实体已移除）
                     ctx.repoint(normal);
@@ -450,13 +461,60 @@ public class CartEngine implements Listener {
         item.setItemMeta(bsm);
     }
 
+    /**
+     * 移除原版特殊矿车前显式处置其原版库存内容物（不依赖 Paper 内部 dropContents）：
+     * <ul>
+     *   <li>若返还物品已内嵌容器内容（BlockStateMeta 的 inventory 非空），说明内容已安全转移到
+     *       返还物品，直接清空原版库存（随后 remove() 即便触发原版 dropContents 也读到空库存，不重复掉落）；</li>
+     *   <li>否则（返还物品未内嵌内容：DROP 策略已倾倒、异常路径等），必须先把原版库存逐格掉落到位置，
+     *       再清空，绝不能静默丢失。位置不可用时保留库存不清空，交由调用方/后续处理兜底。</li>
+     * </ul>
+     */
+    private static void drainOrClearVanillaInventory(ItemStack returnedItem, Minecart cart, Location loc) {
+        if (!(cart instanceof InventoryHolder holder)) {
+            return; // 非容器矿车（熔炉/TNT/命令矿车）无原版库存
+        }
+        org.bukkit.inventory.Inventory inv = holder.getInventory();
+        if (containsEmbeddedContents(returnedItem)) {
+            inv.clear();
+            return;
+        }
+        // 未内嵌内容：逐格掉落再清空
+        if (loc != null && loc.getWorld() != null) {
+            for (ItemStack content : inv.getContents()) {
+                if (content != null && !content.getType().isAir()) {
+                    loc.getWorld().dropItemNaturally(loc, content);
+                }
+            }
+        }
+        inv.clear();
+    }
+
+    /** 返还物品的 BlockStateMeta 容器库存中是否已内嵌内容（非空）。 */
+    private static boolean containsEmbeddedContents(ItemStack item) {
+        if (item == null || !(item.getItemMeta() instanceof BlockStateMeta bsm)) {
+            return false;
+        }
+        if (!(bsm.getBlockState() instanceof org.bukkit.block.Container container)) {
+            return false;
+        }
+        for (ItemStack it : container.getInventory().getContents()) {
+            if (it != null && !it.getType().isAir()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     // ---- tick ----
 
     private void tick() {
         if (contexts.isEmpty()) {
             return;
         }
-        for (CartContextImpl ctx : Map.copyOf(contexts).values()) {
+        // 快照遍历：onTick/失效清理可能触发 removeCart 修改 contexts，直接遍历会抛 CME；
+        // 用 ArrayList 快照而非 Map.copyOf（每 tick 全表拷贝时不必要的不可变包装开销）
+        for (CartContextImpl ctx : new ArrayList<>(contexts.values())) {
             Minecart cart = ctx.getMinecart();
             if (!cart.isValid() || cart.isDead()) {
                 // 实体已失效（未触发 EntityRemoveEvent 的异常路径）：回写/关闭打开中的容器会话，
@@ -588,20 +646,15 @@ public class CartEngine implements Listener {
         // 原版特殊矿车（箱子/漏斗/熔炉/TNT/命令）的实体死亡路径（DEATH 且实体掉落开启）已由服务端
         // 按原版设计掉落“合并物品（Minecart with Chest 等）+ 内容物”（并清空原版库存），
         // 插件刻意跳过处理器补掉逻辑，避免与原版掉落重复；
-        // 第三方 remove()/DISCARD 等无死亡路径仍需 onCartDestroyed 兜底
+        // 其余路径（第三方 remove()/DISCARD/DESPAWN/PLUGIN 等）不预清空原版库存——这里不依赖
+        // Paper 内部 dropContents 是否触发，而是由 onCartDestroyed 的处理器（SpecialCartHandler
+        // 逐格掉落 + clear + setDropOnDestroy(false)）确定性接管内容物处置，既防丢失也防二次掉落。
         boolean vanillaDeathDropped = e.getCause() == EntityRemoveEvent.Cause.DEATH
                 && world != null && Boolean.TRUE.equals(world.getGameRuleValue(GameRule.DO_ENTITY_DROPS));
         if (vanillaDeathDropped && isVanillaCart(cart)) {
             ctx.setDropOnDestroy(false);
             removeCart(cart.getUniqueId());
             return;
-        }
-        // 原版 remove() 路径（RemovalReason.KILLED / DISCARDED 的 shouldDestroy() 均为 true）已由
-        // AbstractMinecartContainer#remove 触发 dropContents 掉落内容物，且该实现不清空库存；
-        // 此处清空原版库存，防止 onCartDestroyed 对同一批内容物二次掉落（如第三方 remove() 触发
-        // PLUGIN cause、自然消失触发 DESPAWN cause 等，MockBukkit 不模拟原版掉落故无法覆盖此场景）
-        if (cart instanceof InventoryHolder holder) {
-            holder.getInventory().clear();
         }
         try {
             try {

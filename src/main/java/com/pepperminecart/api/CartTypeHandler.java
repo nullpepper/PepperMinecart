@@ -63,10 +63,16 @@ public interface CartTypeHandler {
         return TakeOffOutcome.DEFAULT;
     }
 
-    /** 取下时返还的物品（默认：存储的完整物品；无存储时回退到放置材质）。 */
+    /** 取下时返还的物品（默认：存储的完整物品；无存储时回退到放置材质）。
+     *  原始材质缺失或为空气等无法构造物品时返回 null——引擎会取消取下并保留矿车数据，
+     *  而不是返还空气物品。 */
     default ItemStack getTakeOffItem(CartContext ctx) {
         ItemStack item = ctx.getBlockItem();
-        return item != null ? item.clone() : new ItemStack(ctx.getOriginalMaterial());
+        if (item != null) {
+            return item.clone();
+        }
+        Material material = ctx.getOriginalMaterial();
+        return (material == null || material.isAir()) ? null : new ItemStack(material);
     }
 
     /** 引擎每 tick 调度（仅受管矿车）。 */

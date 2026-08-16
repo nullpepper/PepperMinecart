@@ -73,6 +73,11 @@ public class PepperMinecartPlugin extends JavaPlugin {
         registry.register(new AnvilHandler(sessions));
         registry.register(new DispenserCartHandler(config, sessions));
 
+        // 对外服务（供其他插件扩展矿车类型）：先于存量扫描注册——依赖本插件的扩展插件
+        // 在其 onEnable 才 registerCartType，若存量扫描早于类型注册，其矿车会被误解析为通用处理器
+        getServer().getServicesManager().register(PepperMinecartAPI.class,
+                new PepperMinecartAPIImpl(registry, engine), this, ServicePriority.Normal);
+
         // 存量受管矿车：插件启用前已加载的区块不会再触发 ChunkLoadEvent，需主动扫描
         engine.registerLoadedCarts();
 
@@ -89,12 +94,11 @@ public class PepperMinecartPlugin extends JavaPlugin {
         // 命令与权限
         var cmd = getCommand("pepperminecart");
         if (cmd != null) {
-            cmd.setExecutor(new PepperMinecartCommand(config));
+            cmd.setExecutor(new PepperMinecartCommand(config, interactionCooldown));
+        } else {
+            // 判空后必须喊出来：命令名与 plugin.yml 不一致时静默启动会让命令永远"未知命令"，极难排查
+            getLogger().severe("未找到命令 'pepperminecart'，请检查 plugin.yml 的 commands 段");
         }
-
-        // 对外服务（供其他插件扩展矿车类型）
-        getServer().getServicesManager().register(PepperMinecartAPI.class,
-                new PepperMinecartAPIImpl(registry, engine), this, ServicePriority.Normal);
 
         // 统计
         if (BSTATS_PLUGIN_ID > 0) {

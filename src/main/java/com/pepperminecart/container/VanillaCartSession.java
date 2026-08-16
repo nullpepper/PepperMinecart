@@ -40,23 +40,31 @@ class VanillaCartSession extends CartSession {
                 continue;
             }
             Map<Integer, ItemStack> left = player.getInventory().addItem(item);
-            for (ItemStack rest : left.values()) {
-                if (rest != null && !rest.getType().isAir()) {
-                    // 矿车世界/位置可能已不可用（实体移除时关闭界面），退化为掉到玩家脚下；
-                    // 注意 world 非 null 但 location 为 null（实体已失效）同样需要回退，
-                    // 否则剩余物品既不掉落又被下方 top.setItem(i, null) 清空，造成物品丢失
-                    World world = cart.getWorld();
-                    Location loc = world != null ? cart.getLocation() : null;
-                    if (world == null || loc == null) {
-                        world = player.getWorld();
-                        loc = player.getLocation();
+            boolean allHandled = left.isEmpty();
+            if (!allHandled) {
+                // 矿车世界/位置可能已不可用（实体移除时关闭界面），退化为掉到玩家脚下；
+                // 注意 world 非 null 但 location 为 null（实体已失效）同样需要回退，
+                // 否则剩余物品既不掉落又被下方清空槽位，造成物品丢失
+                World world = cart.getWorld();
+                Location loc = world != null ? cart.getLocation() : null;
+                if (world == null || loc == null) {
+                    world = player.getWorld();
+                    loc = player.getLocation();
+                }
+                if (world != null && loc != null) {
+                    for (ItemStack rest : left.values()) {
+                        if (rest != null && !rest.getType().isAir()) {
+                            world.dropItemNaturally(loc, rest);
+                        }
                     }
-                    if (world != null && loc != null) {
-                        world.dropItemNaturally(loc, rest);
-                    }
+                    allHandled = true;
                 }
             }
-            top.setItem(i, null);
+            // 仅当该槽位物品全部被处置（进背包或已掉落）才清空槽位；
+            // 若连回退位置都不可用（极端情况），保留槽位不清空，避免物品静默丢失
+            if (allHandled) {
+                top.setItem(i, null);
+            }
         }
     }
 }

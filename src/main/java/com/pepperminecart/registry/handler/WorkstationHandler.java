@@ -43,6 +43,10 @@ public class WorkstationHandler implements CartTypeHandler {
     @Override
     public boolean onInteract(Player player, CartContext ctx) {
         Material m = ctx.getOriginalMaterial();
+        if (m == null) {
+            // 异常数据（无原始材质）：switch 匹配 null 会抛 NPE；按未处理放行原版行为
+            return false;
+        }
         InventoryView view = switch (m) {
             case CRAFTING_TABLE -> player.openWorkbench(ctx.getLocation(), true);
             case GRINDSTONE -> player.openGrindstone(ctx.getLocation(), true);

@@ -36,4 +36,9 @@ public class InteractionCooldown implements Listener {
     public void onQuit(PlayerQuitEvent event) {
         lastUse.remove(event.getPlayer().getUniqueId());
     }
+
+    /** 清空全部冷却记录（/pm reload 时调用，避免旧冷却残留影响新配置语义）。 */
+    public void clear() {
+        lastUse.clear();
+    }
 }

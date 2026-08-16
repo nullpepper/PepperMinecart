@@ -1,6 +1,7 @@
 package com.pepperminecart.registry;
 
 import com.pepperminecart.api.CartTypeHandler;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -21,6 +22,12 @@ public class CartTypeRegistry {
     }
 
     public void register(CartTypeHandler handler) {
+        if (handler == null) {
+            throw new IllegalArgumentException("handler 不能为 null");
+        }
+        if (handler.getId() == null) {
+            throw new IllegalArgumentException("handler.getId() 不能为 null");
+        }
         CartTypeHandler old = byId.put(handler.getId(), handler);
         if (old != null && old != handler) {
             warn("矿车类型 id 重复注册，已覆盖: " + handler.getId());
@@ -62,6 +69,8 @@ public class CartTypeRegistry {
     }
 
     public Collection<CartTypeHandler> all() {
-        return Collections.unmodifiableCollection(byId.values());
+        // 返回快照而非活视图：调用方（如引擎的 vanillaSupportHandler）遍历期间可能发生
+        // register/unregister，byId.values() 活视图会抛 ConcurrentModificationException
+        return Collections.unmodifiableCollection(new ArrayList<>(byId.values()));
     }
 }

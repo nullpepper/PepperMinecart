@@ -45,8 +45,10 @@ final class AnvilCartSession extends VanillaCartSession {
         if (event.getCurrentItem() == null || event.getCurrentItem().getType().isAir()) {
             return;
         }
-        // 非 shift 点击且光标非空时，点击结果槽是 no-op（无法取走），不消耗判定标记
-        if (!event.isShiftClick() && !event.getView().getCursor().getType().isAir()) {
+        // 非 shift 点击且光标非空时，点击结果槽是 no-op（无法取走），不消耗判定标记；
+        // getCursor() 对非玩家 whoClicked 或异常状态可能为 null，先判空避免 NPE
+        if (!event.isShiftClick() && event.getView().getCursor() != null
+                && !event.getView().getCursor().getType().isAir()) {
             return;
         }
 
@@ -94,12 +96,13 @@ final class AnvilCartSession extends VanillaCartSession {
         }
     }
 
-    /** 执行耐久判定；closeOnBreak=false 用于关闭回调中，避免在 InventoryCloseEvent 里再次 closeInventory。 */
+    /** 执行耐久判定；closeOnBreak=false 用于关闭回调中，避免在 InventoryCloseEvent 里再次 closeInventory。
+     *  markHandled() 为原子单次消费：延迟确认任务与关闭回调两条路径同时到达时，只有先成功置位的
+     *  一方执行耐久判定，另一方直接返回（重复/漏判均被收敛）。 */
     private void applyDamage(Player player, PendingAnvilTake pending, boolean closeOnBreak) {
-        if (pending.isHandled()) {
-            return;
+        if (!pending.markHandled()) {
+            return; // 已被其他路径消费，本次不再处理
         }
-        pending.markHandled();
         pendingTakes.remove(top);
         // 铁砧报废时延迟关闭界面，避免在点击事件处理中直接 closeInventory
         if (anvilTracker.onResultTaken(player, cart) && closeOnBreak) {
@@ -176,8 +179,14 @@ final class AnvilCartSession extends VanillaCartSession {
             return handled;
         }
 
-        void markHandled() {
+        /** 原子单次消费：仅当未处理时置位并返回 true；已被消费则返回 false。
+         *  同步化保证跨 tick 延迟任务与关闭回调并发到达时只一方成功。 */
+        synchronized boolean markHandled() {
+            if (handled) {
+                return false;
+            }
             handled = true;
+            return true;
         }
     }
 }

@@ -74,12 +74,8 @@ public class InteractionListener implements Listener {
         boolean sneaking = player.isSneaking();
         CartTypeHandler type = engine.resolve(cart);
 
-        // 冷却只作用于插件可能处理的交互；空普通矿车非潜行是原版乘坐，不消耗冷却也不拦截
+        // 冷却只作用于插件实际执行的交互；空普通矿车非潜行是原版乘坐，不消耗冷却也不拦截
         if (type == null && !sneaking) {
-            return;
-        }
-        if (!cooldown.tryUse(player)) {
-            e.setCancelled(true);
             return;
         }
 
@@ -94,8 +90,14 @@ public class InteractionListener implements Listener {
         }
 
         if (type == null) {
-            // 空普通矿车：潜行 + 手持方块 → 放置
+            // 空普通矿车：潜行 + 手持方块 → 放置。先完成全部纯校验，确认必然执行后再消耗冷却：
+            // 被拒绝的交互（非候选方块/领地拒绝）不应消耗冷却，否则玩家纠正动作后的
+            // 下一次合法点击会被误拦
             if (sneaking && isPlacementCandidate(cart, player)) {
+                if (!cooldown.tryUse(player)) {
+                    e.setCancelled(true);
+                    return;
+                }
                 placeBlock(player, cart);
                 e.setCancelled(true);
             }
@@ -104,7 +106,7 @@ public class InteractionListener implements Listener {
 
         CartContextImpl ctx;
         if (sneaking) {
-            // 取下：先做全部拦截检查再登记上下文——否则为外来原版矿车创建上下文后又被拦截，
+            // 取下：先做全部拦截检查（不消耗冷却）——否则为外来原版矿车创建上下文后又被拦截，
             // 上下文残留受管集合，矿车之后被破坏时会被误判为销毁而额外掉落
             Material original = originalMaterialOf(cart);
             TakeOffResult mode = effectiveTakeOffMode(type, original);
@@ -124,6 +126,10 @@ public class InteractionListener implements Listener {
                 e.setCancelled(true);
                 return;
             }
+            if (!cooldown.tryUse(player)) {
+                e.setCancelled(true);
+                return;
+            }
             ctx = engine.contextFor(cart, type);
             // 先取消原版交互再执行取下：takeOff 内部异常时也不会继续触发原版上车/打开界面
             e.setCancelled(true);
@@ -132,6 +138,10 @@ public class InteractionListener implements Listener {
             // 非潜行交互只对真正受管（有插件 PDC）的矿车生效：contextFor 会无条件登记上下文，
             // 若用于仅显示方块/第三方数据的矿车会把外车"收养"进受管集合（禁乘/错误掉落）。
             // contextOrNull 只在 PDC 受管时登记/复用上下文，显示-only 矿车直接放行原版行为。
+            if (!cooldown.tryUse(player)) {
+                e.setCancelled(true);
+                return;
+            }
             ctx = engine.contextOrNull(cart);
             if (ctx != null && engine.safeInteract(player, ctx)) {
                 e.setCancelled(true);
@@ -232,18 +242,24 @@ public class InteractionListener implements Listener {
                 engine.removeCart(cart);
                 CartData.clear(cart, type.getId().getNamespace());
                 new CartBlockDisplay(cart).clear();
-                // 特殊矿车转换若已部分生成替代实体（replaceEntity 之后抛异常），一并回收，避免泄漏
-                if (ctx != null && ctx.getMinecart() != cart) {
-                    Minecart replaced = ctx.getMinecart();
-                    engine.removeCart(replaced);
-                    CartData.clear(replaced, type.getId().getNamespace());
-                    // 内容物已在转换时转移进原版库存：回滚移除替代实体前清空，
-                    // 防止 remove() 触发原版 dropContents（DISCARDED.shouldDestroy()==true）
-                    // 把内容物掉到地面，而放置物品仍在玩家手中，造成内容物复制
-                    if (replaced instanceof InventoryHolder holder) {
-                        holder.getInventory().clear();
+                // 特殊矿车转换可能已生成替代实体：以 replaceEntity 显式记录的产物为准回收，
+                // 不能靠"ctx.getMinecart() != cart"推断——替换中途抛异常时 ctx 尚未重定向，
+                // 替代实体（已复制 PDC）会被漏掉，形成幽灵矿车与物品复制
+                if (ctx != null) {
+                    Minecart replaced = ctx.lastReplacement();
+                    if (replaced != null) {
+                        engine.removeCart(replaced);
+                        CartData.clear(replaced, type.getId().getNamespace());
+                        // 内容物已在转换时转移进原版库存：回滚移除替代实体前清空，
+                        // 防止 remove() 触发原版 dropContents（DISCARDED.shouldDestroy()==true）
+                        // 把内容物掉到地面，而放置物品仍在玩家手中，造成内容物复制
+                        if (replaced instanceof InventoryHolder holder) {
+                            holder.getInventory().clear();
+                        }
+                        if (replaced.isValid()) {
+                            replaced.remove();
+                        }
                     }
-                    replaced.remove();
                 }
             } catch (RuntimeException rollbackEx) {
                 // 回滚失败（如实体已被替换/移除）时不再抛出，避免掩盖原始异常
@@ -268,7 +284,12 @@ public class InteractionListener implements Listener {
     // ---- 领地保护协作：模拟原版方块事件，被其他插件取消则禁止操作 ----
 
     private boolean checkPlaceProtection(Player player, Minecart cart) {
-        Block block = cart.getLocation().getBlock();
+        Location location = cart.getLocation();
+        if (location == null || location.getWorld() == null) {
+            // 拿不到位置时拒绝操作：宁可拦下合法操作，也不静默绕过领地保护
+            return false;
+        }
+        Block block = location.getBlock();
         Block against = block.getRelative(BlockFace.DOWN);
         ItemStack item = new ItemStack(player.getInventory().getItemInMainHand().getType());
         BlockPlaceEvent event = new BlockPlaceEvent(block, block.getState(), against, item, player, true,
@@ -278,7 +299,12 @@ public class InteractionListener implements Listener {
     }
 
     private boolean checkBreakProtection(Player player, Minecart cart) {
-        Block block = cart.getLocation().getBlock();
+        Location location = cart.getLocation();
+        if (location == null || location.getWorld() == null) {
+            // 拿不到位置时拒绝操作：宁可拦下合法操作，也不静默绕过领地保护
+            return false;
+        }
+        Block block = location.getBlock();
         BlockBreakEvent event = new BlockBreakEvent(block, player);
         player.getServer().getPluginManager().callEvent(event);
         return !event.isCancelled();

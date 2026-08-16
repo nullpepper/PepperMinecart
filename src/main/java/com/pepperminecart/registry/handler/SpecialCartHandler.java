@@ -76,6 +76,11 @@ public class SpecialCartHandler implements CartTypeHandler, VanillaCartSupport {
     public void onPlaced(Player player, CartContext ctx) {
         Minecart cart = ctx.getMinecart();
         Material m = ctx.getOriginalMaterial();
+        if (m == null) {
+            // 异常数据（无原始材质）：switch 匹配 null 会抛 NPE；显式失败让 placeBlock 走回滚，
+            // 物品不消耗、矿车恢复为空车
+            throw new IllegalStateException("特殊矿车放置时无法解析原始材质，本次放置已取消");
+        }
         MinecartSwap.Motion motion = MinecartSwap.capture(cart);
 
         Minecart replacement = switch (m) {
@@ -83,21 +88,24 @@ public class SpecialCartHandler implements CartTypeHandler, VanillaCartSupport {
             case HOPPER -> MinecartSwap.spawnReplacement(motion, HopperMinecart.class);
             case FURNACE -> MinecartSwap.spawnReplacement(motion, PoweredMinecart.class);
             case TNT -> MinecartSwap.spawnReplacement(motion, ExplosiveMinecart.class);
-            default -> {
+            case COMMAND_BLOCK, CHAIN_COMMAND_BLOCK, REPEATING_COMMAND_BLOCK -> {
                 CommandMinecart cm = MinecartSwap.spawnReplacement(motion, CommandMinecart.class);
                 // 从物品 BlockEntityTag 恢复命令（放置带命令的命令方块物品时保留命令，不丢失）
                 ItemStack blockItem = ctx.getBlockItem();
                 if (blockItem != null && blockItem.getItemMeta() instanceof BlockStateMeta bsm
                         && bsm.getBlockState() instanceof CommandBlock cb) {
-                    cm.setCommand(cb.getCommand());
+                    String command = cb.getCommand();
+                    cm.setCommand(command != null ? command : "");
                 } else {
                     cm.setCommand("");
                 }
                 yield cm;
             }
+            // 未知材质绝不能静默当作命令矿车处理：将来往 MATERIALS 新增材质而漏写 case 时应立即暴露
+            default -> throw new IllegalStateException("未处理的特殊矿车材质: " + m);
         };
 
-        // 先替换上下文：让 placeBlock 的异常回滚能通过 ctx.getMinecart() 清理 replacement
+        // 先替换上下文：让 placeBlock 的异常回滚能通过 ctx.lastReplacement() 清理 replacement
         ctx.replaceEntity(replacement); // 内部已清空旧矿车 PDC/显示
 
         // 物品携带的容器内容（如"带库存的箱子物品"）转移到原版矿车库存；
@@ -121,16 +129,24 @@ public class SpecialCartHandler implements CartTypeHandler, VanillaCartSupport {
 
     /** 把放置物品 BlockStateMeta 中 Container 的内容转移到新矿车库存（有内容才转移；
      *  目标库存更小时只转移能容纳的部分，防止 setContents 因数组超长抛 IllegalArgumentException）。
-     *  @return 目标库存放不下、需要掉落的剩余物品 */
-    private static List<ItemStack> transferContents(Minecart replacement, ItemStack placedItem) {
+     *  目标矿车没有原版库存时（如 PoweredMinecart 熔炉矿车不实现 InventoryHolder），
+     *  内容必须全部作为 leftovers 返回给调用方掉落——绝不能静默丢弃。
+     *  @return 目标库存放不下（或目标无库存）时需要掉落的剩余物品 */
+    static List<ItemStack> transferContents(Minecart replacement, ItemStack placedItem) {
         List<ItemStack> leftovers = new ArrayList<>();
-        if (!(replacement instanceof InventoryHolder holder)) {
-            return leftovers;
-        }
         if (placedItem == null || !(placedItem.getItemMeta() instanceof BlockStateMeta bsm)) {
             return leftovers;
         }
         if (!(bsm.getBlockState() instanceof Container container)) {
+            return leftovers;
+        }
+        if (!(replacement instanceof InventoryHolder holder)) {
+            // 目标矿车没有库存（熔炉矿车等）：内容无法承载，全部退回掉落，避免 stripContents 静默清空
+            for (ItemStack content : container.getInventory().getContents()) {
+                if (content != null && !content.getType().isAir()) {
+                    leftovers.add(content);
+                }
+            }
             return leftovers;
         }
         ItemStack[] contents = container.getInventory().getContents();
@@ -179,9 +195,10 @@ public class SpecialCartHandler implements CartTypeHandler, VanillaCartSupport {
         ItemStack item = template != null ? template.clone() : new ItemStack(material);
         if (cart instanceof CommandMinecart cm) {
             String command = cm.getCommand();
-            if (command != null && !command.isEmpty()
+            if (command != null
                     && item.getItemMeta() instanceof BlockStateMeta bsm
                     && bsm.getBlockState() instanceof CommandBlock cb) {
+                // 空命令也要写回：玩家清空实体命令后取下，模板物品里的旧命令必须被覆盖掉
                 cb.setCommand(command);
                 bsm.setBlockState(cb);
                 item.setItemMeta(bsm);

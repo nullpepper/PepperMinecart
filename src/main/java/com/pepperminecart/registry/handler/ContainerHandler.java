@@ -11,27 +11,26 @@ import java.util.Set;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.Sound;
-import org.bukkit.block.BlockState;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.Inventory;
-import org.bukkit.inventory.InventoryHolder;
 import org.bukkit.inventory.ItemStack;
 
 /**
- * 容器类方块：桶/投掷器（仅容量）/潜影盒及通用容器（任何带 InventoryHolder 的方块）。
- * 内容存于物品 BlockStateMeta 的 Container 中（整物品持久化），编辑同引用即时生效，
- * 取下/掉落时原样归还带内容的物品——潜影盒内容天然随物品回收，无需特判。
+ * 容器类方块：桶/投掷器/潜影盒及通用容器（显式白名单，避免启动时在主线程全量枚举材质并创建
+ * BlockState——省启动时间）。内容存于物品 BlockStateMeta 的 Container 中（整物品持久化），
+ * 编辑同引用即时生效，取下/掉落时原样归还带内容的物品——潜影盒内容天然随物品回收，无需特判。
  */
 public class ContainerHandler implements CartTypeHandler {
 
     public static final NamespacedKey ID = NamespacedKey.fromString("pepperminecart:container");
 
-    /** 由特殊矿车转换或其他类型接管的方块，不得作为普通容器。 */
-    private static final Set<Material> EXCLUDED = Set.of(
-            Material.CHEST, Material.HOPPER, Material.FURNACE, Material.TNT,
-            Material.COMMAND_BLOCK, Material.CHAIN_COMMAND_BLOCK, Material.REPEATING_COMMAND_BLOCK,
-            Material.DISPENSER // 投掷器由 DispenserCartHandler 接管（容器 + 铁轨发射）
+    /** 显式白名单：容器方块中实现 InventoryHolder、且不属于特殊矿车（CHEST/HOPPER/FURNACE/TNT/命令）
+     *  或发射器的方块（发射器由 DispenserCartHandler 接管）。 */
+    private static final Set<Material> KNOWN_CONTAINERS = Set.of(
+            Material.BARREL, Material.DROPPER, Material.TRAPPED_CHEST,
+            Material.SMOKER, Material.BLAST_FURNACE, Material.BREWING_STAND,
+            Material.LECTERN, Material.CHISELED_BOOKSHELF, Material.CRAFTER
     );
 
     private final Set<Material> materials = new HashSet<>();
@@ -39,33 +38,14 @@ public class ContainerHandler implements CartTypeHandler {
 
     public ContainerHandler(CartSessionManager sessions) {
         this.sessions = sessions;
-        materials.add(Material.BARREL);
-        materials.add(Material.DROPPER);
+        materials.addAll(KNOWN_CONTAINERS);
+        // 潜影盒：后缀扫描（仅字符串比较，不创建 BlockState，成本极低，动态覆盖 16 色 + 无染色）
         for (Material m : Material.values()) {
+            if (m.isLegacy()) {
+                continue; // LEGACY_* 潜影盒是 1.13 前的历史材质，不应注册进材质表
+            }
             if (m.name().endsWith("SHULKER_BOX")) {
                 materials.add(m);
-            }
-        }
-        // 通用容器：任何可创建 BlockState 且带 InventoryHolder 的方块
-        for (Material m : Material.values()) {
-            if (EXCLUDED.contains(m) || materials.contains(m)) {
-                continue;
-            }
-            try {
-                // isBlock() 依赖服务端注册表，测试环境（MockBukkit）对 LEGACY_* 材质会抛
-                // UnimplementedOperationException —— 与 createBlockData 一同纳入 try 防御
-                if (!m.isBlock()) {
-                    continue;
-                }
-                BlockState state = m.createBlockData().createBlockState();
-                if (state instanceof InventoryHolder holder) {
-                    int size = holder.getInventory().getSize();
-                    if (size > 0 && size <= 54) {
-                        materials.add(m);
-                    }
-                }
-            } catch (Throwable ignored) {
-                // 个别方块（如 LEGACY_*）无法创建 BlockState，忽略
             }
         }
     }

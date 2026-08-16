@@ -34,7 +34,8 @@ public interface CartContext {
     /** 放置时记录的方块材质（存储物品优先，缺失时回退显示方块）。 */
     Material getOriginalMaterial();
 
-    /** 放置时存储的完整方块物品（含容器内容等 NBT）；未存储（如原版特殊矿车）返回 null。 */
+    /** 放置时存储的完整方块物品（含容器内容等 NBT）；未存储（如原版特殊矿车）返回 null。
+     *  返回的是独立副本：对返回值的修改不会写回存储。 */
     ItemStack getBlockItem();
 
     /** 设置显示方块（同时写入持久化备份）。 */
@@ -59,7 +60,8 @@ public interface CartContext {
 
     String getMetaString(NamespacedKey key);
 
-    /** 设置冷却（世界年龄语义：单调递增、跨卸载/重启持久、不受 /time set 与系统时钟影响）。 */
+    /** 设置冷却（世界年龄语义：使用 World#getGameTime，单调递增、跨卸载/重启持久、
+     *  不受 /time set 与系统时钟影响）。 */
     void setCooldown(NamespacedKey key, int ticks);
 
     boolean hasCooldown(NamespacedKey key);
@@ -82,9 +84,7 @@ public interface CartContext {
      * 不再动作，若既不调用本方法也不改写 PDC，矿车会继续被引擎跟踪
      * （禁止乘坐、每 tick 回调、破坏时按原数据掉落）。</p>
      */
-    default void releaseCart() {
-        // 默认空实现：仅引擎内置实现（CartContextImpl）提供实际清理能力
-    }
+    void releaseCart();
 
     /** 矿车被破坏时是否掉落方块物品与容器内容（默认 true）。 */
     void setDropOnDestroy(boolean drop);

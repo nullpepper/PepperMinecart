@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
+import org.bukkit.Bukkit;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
 import org.bukkit.entity.Minecart;
@@ -57,7 +58,19 @@ public final class CartData {
 
     public static ItemStack getItem(Minecart cart) {
         byte[] b = getBytes(cart, ITEM);
-        return b == null ? null : ItemStack.deserializeBytes(b);
+        if (b == null) {
+            return null;
+        }
+        try {
+            return ItemStack.deserializeBytes(b);
+        } catch (RuntimeException ex) {
+            // 损坏/不兼容的持久化字节（旧版本、其他插件乱写、世界降级）按"无物品"处理：
+            // getItem 处于 resolve() 调用链上，反序列化异常若传播会中断事件链路
+            // （销毁处理中断、context 泄漏、物品不返还）
+            Bukkit.getLogger().log(java.util.logging.Level.WARNING,
+                    "[PepperMinecart] 矿车存储物品数据损坏，已按缺失处理: " + cart.getUniqueId(), ex);
+            return null;
+        }
     }
 
     public static void clearItem(Minecart cart) {

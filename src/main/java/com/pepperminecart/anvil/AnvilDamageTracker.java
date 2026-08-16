@@ -49,13 +49,14 @@ public class AnvilDamageTracker {
         };
 
         if (next == null) {
-            // 报废：方块从矿车消失
-            Material displayed = new CartBlockDisplay(cart).material();
+            // 报废：方块从矿车消失。掉落以存储物品为准（保留自定义名等 ItemMeta），
+            // 不能读显示方块——显示可能被第三方清除/未恢复，读显示会在配置要求掉落时静默少掉
+            ItemStack broken = item.clone();
             new CartBlockDisplay(cart).clear();
             CartData.clear(cart);
             engine.removeCart(cart);
-            if (config.anvilDropOnBreak() && displayed != Material.AIR) {
-                cart.getWorld().dropItemNaturally(cart.getLocation(), new ItemStack(displayed));
+            if (config.anvilDropOnBreak()) {
+                cart.getWorld().dropItemNaturally(cart.getLocation(), broken);
             }
             cart.getWorld().playSound(cart.getLocation(), Sound.BLOCK_ANVIL_BREAK, 1f, 1f);
             // 关闭所有仍打开该矿车铁砧界面的玩家，避免报废后继续使用虚拟铁砧

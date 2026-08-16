@@ -21,6 +21,14 @@ public class PepperMinecartAPIImpl implements PepperMinecartAPI {
 
     @Override
     public void registerCartType(CartTypeHandler handler) {
+        // 入口前置校验：null handler/id 若放进注册表，会在更远的地方（addCart 的
+        // type.getId().toString()）才炸，排查成本高
+        if (handler == null) {
+            throw new IllegalArgumentException("handler 不能为 null");
+        }
+        if (handler.getId() == null) {
+            throw new IllegalArgumentException("handler.getId() 不能为 null");
+        }
         registry.register(handler);
     }
 

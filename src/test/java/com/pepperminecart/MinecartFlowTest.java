@@ -290,7 +290,8 @@ class MinecartFlowTest {
         ctx.setCooldown(key, 40);
         assertTrue(ctx.hasCooldown(key), "设置 40 tick 冷却后立即检查应拦截");
 
-        world.setFullTime(world.getFullTime() + 41);
+        // setGameTime 是 MockBukkit WorldMock 的方法（Bukkit World 接口只有 getGameTime，没有 setter）
+        ((org.mockbukkit.mockbukkit.world.WorldMock) world).setGameTime(world.getGameTime() + 41);
         assertFalse(ctx.hasCooldown(key), "世界年龄超过冷却时长后应放行");
     }
 
@@ -452,12 +453,12 @@ class MinecartFlowTest {
     }
 
     /**
-     * 第三方 remove() 触发 DISCARD 销毁：引擎在 onCartDestroyed 前清空原版库存，
-     * 处理器只补掉方块物品、不再二次掉落内容物（真实服务端上内容物由原版 dropContents
-     * 掉落一次；此处断言插件不重复掉落，避免地面出现双份）。
+     * 第三方 remove() 触发 DISCARD 销毁：引擎不再依赖 Paper 内部 dropContents，也不预清空原版库存，
+     * 内容物由 SpecialCartHandler.onCartDestroyed 逐格掉落（插件确定性接管），方块物品补掉一次。
+     * 真实服务端上即便原版 dropContents 不触发，内容物也不会丢失；此处断言插件自行掉落内容物与方块。
      */
     @Test
-    void destroy_discardSpecialCart_doesNotDropContentsTwice() {
+    void destroy_discardSpecialCart_dropsContentsDeterministically() {
         PlayerMock player = server.addPlayer();
         placeBlock(player, Material.CHEST, 1);
 
@@ -469,8 +470,52 @@ class MinecartFlowTest {
 
         server.getPluginManager().callEvent(new EntityRemoveEvent(converted, EntityRemoveEvent.Cause.DISCARD));
 
-        assertTrue(droppedItems(Material.DIAMOND).isEmpty(), "DISCARD 销毁不应由插件二次掉落内容物");
+        assertEquals(1, droppedItems(Material.DIAMOND).size(),
+                "DISCARD 销毁应插件自行掉落内容物一次（不依赖原版 dropContents，内容不得丢失）");
+        assertEquals(1, droppedItems(Material.CHEST).size(), "仍应补掉方块物品（箱子）一次");
+    }
+
+    /**
+     * 回归：doEntityDrops=false 的世界里特殊矿车死亡时，原版不会掉落内容物，
+     * 引擎也不得提前清空原版库存——内容物必须由 onCartDestroyed 兜底掉落，否则整箱物品凭空消失。
+     */
+    @Test
+    void destroy_deathWithDoEntityDropsFalse_keepsContents() {
+        PlayerMock player = server.addPlayer();
+        placeBlock(player, Material.CHEST, 1);
+
+        StorageMinecart converted = world.getEntities().stream()
+                .filter(en -> en instanceof StorageMinecart)
+                .map(en -> (StorageMinecart) en)
+                .findFirst().orElseThrow();
+        converted.getInventory().setItem(0, new ItemStack(Material.DIAMOND, 3));
+
+        world.setGameRule(org.bukkit.GameRule.DO_ENTITY_DROPS, false);
+        server.getPluginManager().callEvent(new EntityRemoveEvent(converted, EntityRemoveEvent.Cause.DEATH));
+
+        assertEquals(1, droppedItems(Material.DIAMOND).size(),
+                "doEntityDrops=false 时内容物应由插件兜底掉落，不得丢失");
         assertEquals(1, droppedItems(Material.CHEST).size(), "仍应补掉方块物品（箱子）");
+    }
+
+    /**
+     * 回归：被拒绝的交互（黑名单方块放置被拦）不应消耗冷却——
+     * 玩家纠正动作后的下一次合法交互应立即生效，而不是被冷却误拦。
+     */
+    @Test
+    void cooldown_notConsumedByRejectedInteraction() {
+        setConfig("interaction-cooldown-ms", 5000);
+        PlayerMock player = server.addPlayer();
+        RideableMinecart cart = spawnCart();
+        player.setSneaking(true);
+
+        player.getInventory().setItemInMainHand(new ItemStack(Material.BEDROCK, 2)); // 默认黑名单
+        interact(player, cart); // 被拒：不应消耗冷却
+
+        player.getInventory().setItemInMainHand(new ItemStack(Material.GRINDSTONE, 1));
+        PlayerInteractEntityEvent e = interact(player, cart);
+        assertTrue(e.isCancelled(), "被拒绝的交互不应消耗冷却，后续合法交互应立即触发放置");
+        assertTrue(CartData.isManaged(cart), "第二次交互应成功放置方块");
     }
 
     // ---- 审查回归：特殊矿车保留原方块物品的 ItemMeta ----

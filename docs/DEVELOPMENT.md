@@ -21,7 +21,9 @@ PepperMinecart 是一个 Paper 1.21+ 插件，允许玩家把方块放到矿车�
 - 构建产物由 Shadow 打包，relocate `org.bstats`。
 
 ```bash
-JAVA_HOME=/path/to/jdk-21 PATH=$JAVA_HOME/bin:$PATH ./gradlew clean build
+# 注意：必须 JDK 21+。~/jdk-17 无法构建（build.gradle.kts 要求 release 21，
+# 且 paper-api 1.21.4 本身要求 JVM 21）；home 下的 GraalVM JDK 21 可用：
+JAVA_HOME=/home/pepper/graalvm/jdk-21 PATH=$JAVA_HOME/bin:$PATH ./gradlew clean build
 ```
 
 ## 3. 源码结构
@@ -73,7 +75,7 @@ JAVA_HOME=/path/to/jdk-21 PATH=$JAVA_HOME/bin:$PATH ./gradlew clean build
 - 挂有方块的矿车默认禁止乘坐，由 `CartTypeHandler.allowRiding()` 控制。
 - 潜影盒不受 `container-pickup-policy` 管控，始终按 `take-off-mode` 处理。
 - 铁砧耐久链：`ANVIL → CHIPPED_ANVIL → DAMAGED_ANVIL → 报废`。
-- **命令矿车销毁时掉落普通命令方块，不保留命令**：这是预期行为，不是缺陷。
+- **命令矿车放置/取下/销毁时保留命令**：`buildTakeOffItem` 会把实体当前命令写回方块物品（清空命令也会写回空串）；但命令方块的自定义名（`CommandBlock#getName`）与连锁/循环类型不迁移，连锁/循环一律按普通命令矿车处理。
 - 容器内容以“整物品”形式存 PDC，取下时随物品 NBT 回收；特殊矿车内容在取下的瞬间组装进带库存的容器物品。
 - 投掷器矿车使用世界年龄语义冷却，跨区块卸载/重载持久。
 
