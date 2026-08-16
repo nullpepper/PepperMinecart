@@ -91,6 +91,16 @@ public class CartEngine implements Listener {
         }
     }
 
+    /** 类型注册表变化后刷新全部已跟踪 context：把停留于旧 handler 的矿车按新注册表重解析。 */
+    public void rescanManagedContexts() {
+        for (CartContextImpl ctx : new ArrayList<>(contexts.values())) {
+            Minecart cart = ctx.getMinecart();
+            if (CartData.isManaged(cart)) {
+                contextOrNull(cart);
+            }
+        }
+    }
+
     // ---- 类型解析 ----
 
     /**

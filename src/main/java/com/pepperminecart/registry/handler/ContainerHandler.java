@@ -26,12 +26,16 @@ public class ContainerHandler implements CartTypeHandler {
 
     public static final NamespacedKey ID = NamespacedKey.fromString("pepperminecart:container");
 
-    /** 显式白名单：容器方块中实现 InventoryHolder、且不属于特殊矿车（CHEST/HOPPER/FURNACE/TNT/命令）
-     *  或发射器的方块（发射器由 DispenserCartHandler 接管）。 */
+    /**
+     * 显式白名单：容器方块中实现 {@code org.bukkit.block.Container}、且不属于特殊矿车
+     * （CHEST/HOPPER/FURNACE/TNT/命令）或发射器的方块（发射器由 DispenserCartHandler 接管）。
+     * 讲台/雕纹书架虽实现 TileStateInventoryHolder，但不是 Container，openContainer 无法打开，
+     * 因此不列入（按普通方块处理，不承诺原版界面）。
+     */
     private static final Set<Material> KNOWN_CONTAINERS = Set.of(
             Material.BARREL, Material.DROPPER, Material.TRAPPED_CHEST,
             Material.SMOKER, Material.BLAST_FURNACE, Material.BREWING_STAND,
-            Material.LECTERN, Material.CHISELED_BOOKSHELF, Material.CRAFTER
+            Material.CRAFTER
     );
 
     private final Set<Material> materials = new HashSet<>();

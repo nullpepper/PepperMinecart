@@ -2,6 +2,8 @@ package com.pepperminecart.interaction;
 
 import com.pepperminecart.api.CartTypeHandler;
 import com.pepperminecart.api.TakeOffResult;
+import com.pepperminecart.api.event.CartBlockPlaceEvent;
+import com.pepperminecart.api.event.CartBlockTakeOffEvent;
 import com.pepperminecart.config.ContainerPickupPolicy;
 import com.pepperminecart.config.PluginConfig;
 import com.pepperminecart.cooldown.InteractionCooldown;
@@ -59,7 +61,9 @@ public class InteractionListener implements Listener {
         this.cooldown = cooldown;
     }
 
-    @EventHandler(priority = EventPriority.HIGHEST, ignoreCancelled = true)
+    // HIGH 而非 HIGHEST：给同监听器注册顺序在后的保护插件（HIGHEST）留出先拦截的机会，
+    // 本插件只在保护插件之后执行动作；同优先级顺序风险仍存在，但 HIGHEST 保护插件已先于本插件。
+    @EventHandler(priority = EventPriority.HIGH, ignoreCancelled = true)
     public void onInteractEntity(PlayerInteractEntityEvent e) {
         if (e.getHand() != EquipmentSlot.HAND) {
             return;
@@ -295,9 +299,17 @@ public class InteractionListener implements Listener {
             // 拿不到位置时拒绝操作：宁可拦下合法操作，也不静默绕过领地保护
             return false;
         }
+        Material material = player.getInventory().getItemInMainHand().getType();
+        // 矿车语义保护事件（新）：让保护插件按“往矿车上放方块”精确判定
+        CartBlockPlaceEvent cartEvent = new CartBlockPlaceEvent(player, cart, material);
+        player.getServer().getPluginManager().callEvent(cartEvent);
+        if (cartEvent.isCancelled()) {
+            return false;
+        }
+        // 兼容旧的方块事件模拟：以矿车所在方块（通常为铁轨）作为代理
         Block block = location.getBlock();
         Block against = block.getRelative(BlockFace.DOWN);
-        ItemStack item = new ItemStack(player.getInventory().getItemInMainHand().getType());
+        ItemStack item = new ItemStack(material);
         BlockPlaceEvent event = new BlockPlaceEvent(block, block.getState(), against, item, player, true,
                 EquipmentSlot.HAND);
         player.getServer().getPluginManager().callEvent(event);
@@ -310,6 +322,14 @@ public class InteractionListener implements Listener {
             // 拿不到位置时拒绝操作：宁可拦下合法操作，也不静默绕过领地保护
             return false;
         }
+        Material material = originalMaterialOf(cart);
+        // 矿车语义保护事件（新）：让保护插件按“从矿车上取下方块”精确判定
+        CartBlockTakeOffEvent cartEvent = new CartBlockTakeOffEvent(player, cart, material);
+        player.getServer().getPluginManager().callEvent(cartEvent);
+        if (cartEvent.isCancelled()) {
+            return false;
+        }
+        // 兼容旧的方块事件模拟：以矿车所在方块（通常为铁轨）作为代理
         Block block = location.getBlock();
         BlockBreakEvent event = new BlockBreakEvent(block, player);
         player.getServer().getPluginManager().callEvent(event);

@@ -73,13 +73,14 @@ public class PepperMinecartPlugin extends JavaPlugin {
         registry.register(new AnvilHandler(sessions));
         registry.register(new DispenserCartHandler(config, sessions));
 
-        // 对外服务（供其他插件扩展矿车类型）：先于存量扫描注册——依赖本插件的扩展插件
-        // 在其 onEnable 才 registerCartType，若存量扫描早于类型注册，其矿车会被误解析为通用处理器
+        // 对外服务（供其他插件扩展矿车类型）：先于存量扫描注册服务。
+        // 依赖本插件的扩展插件在本插件 onEnable 返回后才执行自己的 onEnable/registerCartType，
+        // 因此存量扫描延迟到下一个 tick：让所有依赖插件先完成类型注册，避免扩展矿车被误解析为通用处理器。
         getServer().getServicesManager().register(PepperMinecartAPI.class,
                 new PepperMinecartAPIImpl(registry, engine), this, ServicePriority.Normal);
 
         // 存量受管矿车：插件启用前已加载的区块不会再触发 ChunkLoadEvent，需主动扫描
-        engine.registerLoadedCarts();
+        getServer().getScheduler().runTask(this, engine::registerLoadedCarts);
 
         // 引擎与监听器
         engine.start();

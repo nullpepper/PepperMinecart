@@ -39,4 +39,14 @@ class ContainerHandlerTest {
         assertThrows(UnsupportedOperationException.class, () -> handler.handledMaterials().clear(),
                 "材质集合是注册表依据，不得暴露可变内部集合");
     }
+
+    @Test
+    void lecternAndChiseledBookshelfAreNotRoutedAsOpenableContainers() {
+        // 它们不是 org.bukkit.block.Container，走 openContainer 会永远返回 null（死功能）；
+        // 移出白名单后按普通方块处理（可放置/取下，不承诺原版界面）。
+        ContainerHandler handler = new ContainerHandler(
+                new CartSessionManager(null, new PluginConfig(null), null));
+        assertFalse(handler.handledMaterials().contains(Material.LECTERN));
+        assertFalse(handler.handledMaterials().contains(Material.CHISELED_BOOKSHELF));
+    }
 }

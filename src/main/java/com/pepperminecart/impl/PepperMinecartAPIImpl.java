@@ -30,6 +30,11 @@ public class PepperMinecartAPIImpl implements PepperMinecartAPI {
             throw new IllegalArgumentException("handler.getId() 不能为 null");
         }
         registry.register(handler);
+        // 类型表变化后重扫：已跟踪 context 按新注册表刷新；已加载区块的存量矿车也补扫
+        if (engine != null) {
+            engine.rescanManagedContexts();
+            engine.registerLoadedCarts();
+        }
     }
 
     @Override
