@@ -2,8 +2,10 @@ package com.pepperminecart.registry;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.pepperminecart.api.CartTypeHandler;
+import java.util.HashSet;
 import java.util.Set;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -64,5 +66,40 @@ class CartTypeRegistryTest {
 
         assertEquals(b, registry.byMaterial(Material.CHEST));
         assertEquals(a, registry.byId(NamespacedKey.fromString("test:a")));
+    }
+
+    @Test
+    void nullMaterialSetIsRejectedBeforeAnyStateChange() {
+        CartTypeRegistry registry = new CartTypeRegistry(null);
+        NamespacedKey id = NamespacedKey.fromString("test:null-mats");
+        assertThrows(IllegalArgumentException.class, () -> registry.register(handler(id, null)));
+        assertNull(registry.byId(id), "校验失败时 byId 不得半更新");
+    }
+
+    @Test
+    void nullMaterialElementIsRejectedBeforeAnyStateChange() {
+        CartTypeRegistry registry = new CartTypeRegistry(null);
+        NamespacedKey id = NamespacedKey.fromString("test:null-element");
+        Set<Material> materials = new HashSet<>();
+        materials.add(Material.CHEST);
+        materials.add(null);
+        assertThrows(IllegalArgumentException.class, () -> registry.register(handler(id, materials)));
+        assertNull(registry.byId(id), "校验失败时 byId 不得半更新");
+        assertNull(registry.byMaterial(Material.CHEST), "校验失败时 byMaterial 不得半更新");
+    }
+
+    @Test
+    void sameInstanceReRegisterWithChangedMaterialsCleansOldMapping() {
+        CartTypeRegistry registry = new CartTypeRegistry(null);
+        Set<Material> materials = new HashSet<>(Set.of(Material.CHEST));
+        CartTypeHandler mutable = handler(NamespacedKey.fromString("test:mutable"), materials);
+        registry.register(mutable);
+
+        materials.remove(Material.CHEST);
+        materials.add(Material.HOPPER);
+        registry.register(mutable);
+
+        assertEquals(mutable, registry.byMaterial(Material.HOPPER));
+        assertNull(registry.byMaterial(Material.CHEST), "同一实例重注册后旧材质映射必须清理");
     }
 }

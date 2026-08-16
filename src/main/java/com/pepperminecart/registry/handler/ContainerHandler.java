@@ -6,6 +6,7 @@ import com.pepperminecart.api.TakeOffOutcome;
 import com.pepperminecart.api.TakeOffResult;
 import com.pepperminecart.container.CartSessionManager;
 import com.pepperminecart.storage.CartData;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.Set;
 import org.bukkit.Material;
@@ -52,7 +53,7 @@ public class ContainerHandler implements CartTypeHandler {
 
     /** 潜影盒判定（潜影盒不受取下策略限制，始终进背包）。 */
     public static boolean isShulkerBox(Material material) {
-        return material != null && material.name().endsWith("SHULKER_BOX");
+        return material != null && !material.isLegacy() && material.name().endsWith("SHULKER_BOX");
     }
 
     @Override
@@ -62,7 +63,8 @@ public class ContainerHandler implements CartTypeHandler {
 
     @Override
     public Set<Material> handledMaterials() {
-        return materials;
+        // 不可变视图：注册表会遍历该集合，外部 clear/修改会破坏路由表
+        return Collections.unmodifiableSet(materials);
     }
 
     @Override

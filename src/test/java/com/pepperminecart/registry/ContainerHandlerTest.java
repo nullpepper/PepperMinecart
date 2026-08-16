@@ -1,8 +1,11 @@
 package com.pepperminecart.registry;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.pepperminecart.config.PluginConfig;
+import com.pepperminecart.container.CartSessionManager;
 import com.pepperminecart.registry.handler.ContainerHandler;
 import org.bukkit.Material;
 import org.junit.jupiter.api.Test;
@@ -22,5 +25,18 @@ class ContainerHandlerTest {
         assertFalse(ContainerHandler.isShulkerBox(Material.SHULKER_SHELL));
         assertFalse(ContainerHandler.isShulkerBox(Material.SHULKER_SPAWN_EGG));
         assertFalse(ContainerHandler.isShulkerBox(Material.CHEST));
+    }
+
+    @Test
+    void isShulkerBoxRejectsLegacyMaterials() {
+        assertFalse(ContainerHandler.isShulkerBox(Material.LEGACY_WHITE_SHULKER_BOX));
+    }
+
+    @Test
+    void handledMaterialsReturnsUnmodifiableView() {
+        ContainerHandler handler = new ContainerHandler(
+                new CartSessionManager(null, new PluginConfig(null), null));
+        assertThrows(UnsupportedOperationException.class, () -> handler.handledMaterials().clear(),
+                "材质集合是注册表依据，不得暴露可变内部集合");
     }
 }

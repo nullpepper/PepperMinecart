@@ -44,11 +44,17 @@ public class PepperMinecartAPIImpl implements PepperMinecartAPI {
 
     @Override
     public boolean isManagedCart(Minecart cart) {
+        if (cart == null) {
+            throw new IllegalArgumentException("cart 不能为 null");
+        }
         return engine.isManaged(cart);
     }
 
     @Override
     public CartContext getContext(Minecart cart) {
+        if (cart == null) {
+            throw new IllegalArgumentException("cart 不能为 null");
+        }
         return engine.contextOrNull(cart);
     }
 }
