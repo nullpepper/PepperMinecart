@@ -4,11 +4,11 @@ import com.pepperminecart.api.CartContext;
 import com.pepperminecart.api.CartTypeHandler;
 import com.pepperminecart.api.TakeOffResult;
 import com.pepperminecart.config.PluginConfig;
+import com.pepperminecart.delivery.ItemDelivery;
 import com.pepperminecart.display.CartBlockDisplay;
 import com.pepperminecart.engine.CartEngine;
 import com.pepperminecart.storage.CartData;
 import java.util.ArrayList;
-import java.util.Map;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -210,30 +210,40 @@ public class CartContextImpl implements CartContext {
 
     @Override
     public void giveItem(Player player, ItemStack item) {
-        // 注意：此公开入口按全局 take-off-mode 分发；取下流程内部应使用引擎的三参重载
-        // giveItem(player, item, mode) 以遵循本次实际策略（如容器 DROP 策略）
-        giveItem(player, item, config.takeOffMode());
+        // 注意：此公开入口按全局 take-off-mode 分发；取下流程内部应使用 deliverItem
+        // (player, item, mode) 以遵循本次实际策略（如容器 DROP 策略）
+        deliverItem(player, item, config.takeOffMode());
     }
 
-    /** 引擎内部按本次实际取下策略分发，避免绕过调用方传入的 mode。 */
+    /** 旧签名兼容入口：新代码请使用 {@link #deliverItem(Player, ItemStack, TakeOffResult)} 获取交付结果。 */
+    @Deprecated
     public void giveItem(Player player, ItemStack item, TakeOffResult mode) {
+        deliverItem(player, item, mode);
+    }
+
+    /** 引擎内部按本次实际取下策略分发，并如实报告是否安全交付。 */
+    @Override
+    public boolean deliverItem(Player player, ItemStack item, TakeOffResult mode) {
         if (item == null || item.getType().isAir()) {
-            return;
+            return true;
         }
-        switch (mode) {
+        return switch (mode) {
             case INVENTORY -> giveOrDrop(player, item);
-            case DROP -> dropItem(item);
-            case DISABLED -> {
-                // 禁止取下：不交付任何物品。正常交互路径在进入 takeOff 前已拦截（InteractionListener），
-                // 此处为 API 直接调用/处理器误用时的防御：既不入背包也不落地
-            }
-        }
+            case DROP -> tryDropItem(item);
+            case DISABLED -> true; // 禁止取下：调用方本不应进入交付
+        };
     }
 
     @Override
     public void dropItem(ItemStack item) {
+        // 兼容旧 API：调用方忽略结果时，掉落失败无法上报；新代码请使用 tryDropItem
+        tryDropItem(item);
+    }
+
+    @Override
+    public boolean tryDropItem(ItemStack item) {
         if (item == null || item.getType().isAir()) {
-            return;
+            return true;
         }
         World world = cart.getWorld();
         Location loc = cart.getLocation();
@@ -242,10 +252,7 @@ public class CartContextImpl implements CartContext {
             world = lastWorld;
             loc = lastLocation;
         }
-        if (world == null || loc == null) {
-            return; // 仍无可用位置，只能放弃（防御）
-        }
-        world.dropItemNaturally(loc, item);
+        return ItemDelivery.dropItem(world, loc, item) != null;
     }
 
     @Override
@@ -310,11 +317,7 @@ public class CartContextImpl implements CartContext {
         return dropOnDestroy;
     }
 
-    private void giveOrDrop(Player player, ItemStack item) {
-        Map<Integer, ItemStack> left = player.getInventory().addItem(item);
-        if (left.isEmpty()) {
-            return;
-        }
+    private boolean giveOrDrop(Player player, ItemStack item) {
         World world = cart.getWorld();
         Location loc = cart.getLocation();
         if (world == null || loc == null) {
@@ -322,13 +325,6 @@ public class CartContextImpl implements CartContext {
             world = lastWorld;
             loc = lastLocation;
         }
-        if (world == null || loc == null) {
-            return; // 仍无可用位置，只能放弃（防御）
-        }
-        for (ItemStack rest : left.values()) {
-            if (rest != null && !rest.getType().isAir()) {
-                world.dropItemNaturally(loc, rest);
-            }
-        }
+        return ItemDelivery.giveOrDrop(player, item, world, loc) == ItemDelivery.Result.DELIVERED;
     }
 }

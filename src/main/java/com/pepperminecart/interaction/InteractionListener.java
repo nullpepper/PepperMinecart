@@ -219,6 +219,10 @@ public class InteractionListener implements Listener {
         }
         ItemStack placed = hand.clone();
         placed.setAmount(1);
+        // 放置事务：先消耗“放置时快照”，再执行可能改变背包的回调；回调失败时恢复快照。
+        // 成功后再读主手会读到回调修改后的物品，导致扣错物品或复制方块。
+        ItemStack handSnapshot = hand.clone();
+        consumeOneFromMainHand(player, hand);
 
         // 提前捕获位置与世界：特殊矿车转换会移除原矿车实体，之后再读 getWorld/getLocation 不安全
         Location loc = cart.getLocation();
@@ -235,10 +239,11 @@ public class InteractionListener implements Listener {
                 ctx.setDisplayOffset(config.displayBlockOffset());
             }
         } catch (RuntimeException ex) {
-            // 放置异常（如实体生成失败）：物品尚未消耗，回滚已写入的 PDC/上下文，
-            // 使矿车恢复为空车，避免"矿车带块 + 物品未消耗"的复制
+            // 放置异常（如实体生成失败）：恢复放置前的主手快照，回滚已写入的 PDC/上下文，
+            // 使矿车恢复为空车，避免"矿车带块 + 物品已消耗"或反向的复制
             plugin.getLogger().log(Level.WARNING, "[PepperMinecart] 放置方块到矿车时发生异常，本次放置已取消", ex);
             try {
+                player.getInventory().setItemInMainHand(handSnapshot);
                 engine.removeCart(cart);
                 CartData.clear(cart, type.getId().getNamespace());
                 new CartBlockDisplay(cart).clear();
@@ -267,17 +272,18 @@ public class InteractionListener implements Listener {
             return;
         }
 
-        // 放置成功后再消耗物品，显式写回主手
-        ItemStack inHand = player.getInventory().getItemInMainHand();
-        if (inHand.getAmount() <= 1) {
-            player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
-        } else {
-            inHand.setAmount(inHand.getAmount() - 1);
-            player.getInventory().setItemInMainHand(inHand);
-        }
-
         if (config.soundPlace()) {
             world.playSound(loc, Sound.BLOCK_STONE_PLACE, 1f, 1f);
+        }
+    }
+
+    /** 从主手扣减 1 个物品（扣减的是传入的快照，而不是方法调用时的主手）。 */
+    private static void consumeOneFromMainHand(Player player, ItemStack snapshot) {
+        if (snapshot.getAmount() <= 1) {
+            player.getInventory().setItemInMainHand(new ItemStack(Material.AIR));
+        } else {
+            snapshot.setAmount(snapshot.getAmount() - 1);
+            player.getInventory().setItemInMainHand(snapshot);
         }
     }
 

@@ -1,12 +1,16 @@
 package com.pepperminecart.anvil;
 
 import com.pepperminecart.config.PluginConfig;
+import com.pepperminecart.delivery.ItemDelivery;
 import com.pepperminecart.display.CartBlockDisplay;
 import com.pepperminecart.engine.CartEngine;
 import com.pepperminecart.storage.CartData;
 import java.util.concurrent.ThreadLocalRandom;
+import org.bukkit.Bukkit;
+import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Sound;
+import org.bukkit.World;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.inventory.ItemStack;
@@ -35,6 +39,9 @@ public class AnvilDamageTracker {
         if (!config.anvilDamageEnabled() || !cart.isValid() || !CartData.isManaged(cart)) {
             return false;
         }
+        if (!(config.anvilDamageChance() > 0.0)) {
+            return false; // 防御 NaN/0：概率不是正数时永不损坏
+        }
         if (ThreadLocalRandom.current().nextDouble() >= config.anvilDamageChance()) {
             return false;
         }
@@ -52,12 +59,20 @@ public class AnvilDamageTracker {
             // 报废：方块从矿车消失。掉落以存储物品为准（保留自定义名等 ItemMeta），
             // 不能读显示方块——显示可能被第三方清除/未恢复，读显示会在配置要求掉落时静默少掉
             ItemStack broken = item.clone();
+            if (config.anvilDropOnBreak()) {
+                World world = cart.getWorld();
+                Location loc = cart.getLocation();
+                // 先确保返还物品真实交付（进背包或掉落成功），再清除矿车数据；
+                // 交付失败则取消本次报废，物品仍可从矿车找回
+                if (ItemDelivery.giveOrDrop(player, broken, world, loc) != ItemDelivery.Result.DELIVERED) {
+                    Bukkit.getLogger().warning("[PepperMinecart] 铁砧报废掉落被取消或位置不可用，已取消报废: "
+                            + cart.getUniqueId());
+                    return false;
+                }
+            }
             new CartBlockDisplay(cart).clear();
             CartData.clear(cart);
             engine.removeCart(cart);
-            if (config.anvilDropOnBreak()) {
-                cart.getWorld().dropItemNaturally(cart.getLocation(), broken);
-            }
             cart.getWorld().playSound(cart.getLocation(), Sound.BLOCK_ANVIL_BREAK, 1f, 1f);
             // 关闭所有仍打开该矿车铁砧界面的玩家，避免报废后继续使用虚拟铁砧
             engine.closeCartSessionsLater(cart);

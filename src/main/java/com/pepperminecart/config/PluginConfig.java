@@ -4,6 +4,7 @@ import com.pepperminecart.api.TakeOffResult;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.logging.Logger;
 import org.bukkit.Material;
@@ -61,36 +62,16 @@ public class PluginConfig {
         parseMaterials(checkedList(c, "enabled-blocks"), enabledBlocks);
         respectProtection = c.getBoolean("respect-protection", true);
 
-        int rawDisplayOffset = c.getInt("display-block-offset", 6);
-        if (c.contains("display-block-offset") && !c.isInt("display-block-offset")) {
-            if (logger != null) {
-                logger.warning("config.yml 中的 display-block-offset 不是整数，按默认值 6 处理");
-            }
-            rawDisplayOffset = 6;
-        }
-        displayBlockOffset = Math.max(0, Math.min(16, rawDisplayOffset));
-        if (rawDisplayOffset != displayBlockOffset && logger != null) {
-            logger.warning("config.yml 中的 display-block-offset 超出 0-16 范围，已修正为 " + displayBlockOffset);
-        }
-
-        int rawCooldown = c.getInt("interaction-cooldown-ms", 250);
-        if (c.contains("interaction-cooldown-ms") && !c.isInt("interaction-cooldown-ms")) {
-            if (logger != null) {
-                logger.warning("config.yml 中的 interaction-cooldown-ms 不是整数，按默认值 250 处理");
-            }
-            rawCooldown = 250;
-        }
-        interactionCooldownMs = Math.max(0, rawCooldown);
-        if (rawCooldown != interactionCooldownMs && logger != null) {
-            logger.warning("config.yml 中的 interaction-cooldown-ms 为负数，已修正为 0");
-        }
+        displayBlockOffset = intInRange(c, "display-block-offset", 6, 0, 16);
+        interactionCooldownMs = intInRange(c, "interaction-cooldown-ms", 250, 0, Integer.MAX_VALUE);
 
         soundPlace = c.getBoolean("sounds.place", true);
         soundTakeOff = c.getBoolean("sounds.take-off", true);
         vanillaCartPickupAllowed = c.getBoolean("vanilla-carts.allow-pickup", true);
-        ContainerPickupPolicy parsedPolicy = ContainerPickupPolicy.parse(c.getString("container-pickup-policy"));
+        String rawPolicy = c.getString("container-pickup-policy");
+        ContainerPickupPolicy parsedPolicy = ContainerPickupPolicy.parse(rawPolicy);
         if (parsedPolicy == null) {
-            if (logger != null) {
+            if (rawPolicy != null && logger != null) {
                 logger.warning("config.yml 中的 container-pickup-policy 无效（应为 PICKUP / DROP / FORBIDDEN），按 PICKUP 处理");
             }
             containerPickupPolicy = ContainerPickupPolicy.PICKUP;
@@ -98,21 +79,11 @@ public class PluginConfig {
             containerPickupPolicy = parsedPolicy;
         }
         anvilDamageEnabled = c.getBoolean("anvil-damage.enabled", true);
-        double rawChance = c.getDouble("anvil-damage.chance-per-use", 0.12);
-        if (c.contains("anvil-damage.chance-per-use") && !c.isDouble("anvil-damage.chance-per-use")) {
-            if (logger != null) {
-                logger.warning("config.yml 中的 anvil-damage.chance-per-use 不是数字，按默认值 0.12 处理");
-            }
-            rawChance = 0.12;
-        }
-        anvilDamageChance = Math.max(0.0, Math.min(1.0, rawChance));
-        if (rawChance != anvilDamageChance && logger != null) {
-            logger.warning("config.yml 中的 anvil-damage.chance-per-use 超出 0.0-1.0 范围，已修正为 " + anvilDamageChance);
-        }
+        anvilDamageChance = doubleInRange(c, "anvil-damage.chance-per-use", 0.12, 0.0, 1.0);
         anvilDropOnBreak = c.getBoolean("anvil-damage.drop-on-break", false);
-        dispenserCooldownTicks = Math.max(1, c.getInt("dispenser-cart.cooldown-ticks", 40));
-        dispenserEjectOffset = Math.max(0.0, c.getDouble("dispenser-cart.eject-offset", 0.6));
-        dispenserEjectSpeed = Math.max(0.0, c.getDouble("dispenser-cart.eject-speed", 0.5));
+        dispenserCooldownTicks = intInRange(c, "dispenser-cart.cooldown-ticks", 40, 1, 1200);
+        dispenserEjectOffset = doubleInRange(c, "dispenser-cart.eject-offset", 0.6, 0.0, 8.0);
+        dispenserEjectSpeed = doubleInRange(c, "dispenser-cart.eject-speed", 0.5, 0.0, 4.0);
     }
 
     // ---- getters ----
@@ -190,10 +161,60 @@ public class PluginConfig {
 
     /** 该方块是否允许放置到矿车上。 */
     public boolean isBlockAllowed(Material material) {
+        if (material == null) {
+            return false;
+        }
         if (allowAllBlocks) {
             return !disabledBlocks.contains(material);
         }
         return enabledBlocks.contains(material);
+    }
+
+    /**
+     * 读取整数配置并钳制到 [min, max]：按“值是否为 Number”判型，而不是按 YAML 标量实际类型判型。
+     * YAML 中 0 是 Integer、10.0 是 Double，两者都是合法的数值配置。
+     * 非数值按默认值处理；越界钳制并告警。
+     */
+    private int intInRange(FileConfiguration c, String path, int def, int min, int max) {
+        Object raw = c.get(path);
+        if (!(raw instanceof Number number)) {
+            if (raw != null && logger != null) {
+                logger.warning("config.yml 中的 " + path + " 不是整数，按默认值 " + def + " 处理");
+            }
+            return def;
+        }
+        int value = number.intValue();
+        int clamped = Math.max(min, Math.min(max, value));
+        if (clamped != value && logger != null) {
+            logger.warning("config.yml 中的 " + path + " 超出 " + min + "-" + max + " 范围，已修正为 " + clamped);
+        }
+        return clamped;
+    }
+
+    /**
+     * 读取浮点配置并钳制到 [min, max]：NaN/Infinity 视为非法按默认值处理，
+     * 否则 Math.max/min 会把 NaN 透传进运行值（如概率 NaN 导致铁砧每次都损坏）。
+     */
+    private double doubleInRange(FileConfiguration c, String path, double def, double min, double max) {
+        Object raw = c.get(path);
+        if (!(raw instanceof Number number)) {
+            if (raw != null && logger != null) {
+                logger.warning("config.yml 中的 " + path + " 不是数字，按默认值 " + def + " 处理");
+            }
+            return def;
+        }
+        double value = number.doubleValue();
+        if (Double.isNaN(value) || Double.isInfinite(value)) {
+            if (logger != null) {
+                logger.warning("config.yml 中的 " + path + " 是 NaN/Infinity，按默认值 " + def + " 处理");
+            }
+            return def;
+        }
+        double clamped = Math.max(min, Math.min(max, value));
+        if (Double.compare(clamped, value) != 0 && logger != null) {
+            logger.warning("config.yml 中的 " + path + " 超出 " + min + "-" + max + " 范围，已修正为 " + clamped);
+        }
+        return clamped;
     }
 
     /** 键存在但值不是列表时（YAML 误写成标量，如 disabled-blocks: BEDROCK 少了 "-"）返回空列表并告警：
@@ -229,7 +250,7 @@ public class PluginConfig {
                     }
                     continue;
                 }
-            } catch (Throwable ignored) {
+            } catch (RuntimeException ignored) {
                 // 无服务端注册表的测试环境无法判定，接受该材质
             }
             out.add(m);
@@ -241,7 +262,7 @@ public class PluginConfig {
             return def;
         }
         try {
-            return Enum.valueOf(type, value.trim().toUpperCase());
+            return Enum.valueOf(type, value.trim().toUpperCase(Locale.ROOT));
         } catch (IllegalArgumentException e) {
             return def;
         }

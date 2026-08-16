@@ -244,12 +244,17 @@ public class SpecialCartHandler implements CartTypeHandler, VanillaCartSupport {
         // “合并物品（Minecart with Chest 等）+ 内容物”并清空原版库存，不会进入此方法；
         // 这里只兜底第三方 remove()/自然消失等无死亡路径，把库存剩余内容掉落，防止内容凭空消失。
         if (cart instanceof InventoryHolder holder) {
+            boolean allDropped = true;
             for (ItemStack content : holder.getInventory().getContents()) {
-                if (content != null && !content.getType().isAir()) {
-                    ctx.dropItem(content);
+                if (content != null && !content.getType().isAir() && !ctx.tryDropItem(content)) {
+                    allDropped = false;
+                    break;
                 }
             }
-            holder.getInventory().clear();
+            // 只有全部内容都真实掉落才清空；掉落被取消/位置不可用时保留原版库存，不得静默蒸发
+            if (allDropped) {
+                holder.getInventory().clear();
+            }
         }
         // 补掉方块物品：模板优先保留 ItemMeta（内容已逐格掉落，不再嵌入物品）；
         // 命令矿车会保留命令，避免销毁后命令丢失

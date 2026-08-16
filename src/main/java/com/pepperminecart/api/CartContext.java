@@ -69,8 +69,36 @@ public interface CartContext {
     /** 按取下策略把物品交给玩家（背包优先，溢出落地；DROP 模式直接落地）。 */
     void giveItem(Player player, ItemStack item);
 
+    /**
+     * 按本次取下策略交付物品，并如实返回是否成功：进背包全部成功或掉落全部成功才返回 true；
+     * 掉落被取消/位置不可用时返回 false，调用方据此决定是否继续清空源数据。
+     * <p>默认实现委托 {@link #giveItem} 并乐观返回 true；实现类应覆盖为精确结果。</p>
+     */
+    default boolean deliverItem(Player player, ItemStack item, TakeOffResult mode) {
+        giveItem(player, item);
+        return true;
+    }
+
     /** 在矿车位置掉落物品。 */
     void dropItem(ItemStack item);
+
+    /**
+     * 尝试在矿车位置（失效时回退到最后已知位置）掉落物品。
+     *
+     * @return true 仅当物品无需处理或掉落实体成功生成；掉落被取消/位置不可用返回 false，
+     *         调用方必须保留源物品，避免静默丢失
+     */
+    default boolean tryDropItem(ItemStack item) {
+        if (item == null || item.getType().isAir()) {
+            return true;
+        }
+        World world = getWorld();
+        Location location = getLocation();
+        if (world == null || location == null) {
+            return false;
+        }
+        return world.dropItemNaturally(location, item.clone()) != null;
+    }
 
     /** 替换矿车实体（如转换为特殊矿车），自动复制数据并重新跟踪。 */
     void replaceEntity(Minecart newCart);

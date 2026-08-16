@@ -7,6 +7,7 @@ import com.pepperminecart.api.VanillaCartSupport;
 import com.pepperminecart.config.ContainerPickupPolicy;
 import com.pepperminecart.config.PluginConfig;
 import com.pepperminecart.container.CartSessionManager;
+import com.pepperminecart.delivery.ItemDelivery;
 import com.pepperminecart.display.CartBlockDisplay;
 import com.pepperminecart.impl.CartContextImpl;
 import com.pepperminecart.registry.CartTypeRegistry;
@@ -14,6 +15,7 @@ import com.pepperminecart.registry.handler.GenericBlockHandler;
 import com.pepperminecart.storage.CartData;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.function.Consumer;
@@ -404,9 +406,13 @@ public class CartEngine implements Listener {
                     // （内容已转移到返还物品）；否则（返还物品未内嵌内容：DROP 策略已倾倒或异常路径）
                     // 必须先把原版库存逐格掉落，绝不能静默丢失。清空后再 remove()，即便 Paper 随后
                     // 触发原版 dropContents 也读到空库存，不会二次掉落。
-                    drainOrClearVanillaInventory(item, current, loc);
+                    // 只有全部内容安全掉落才清空原版库存；否则保留，由 Paper 原生 dropContents 兜底
+                    if (!drainOrClearVanillaInventory(item, current, loc)) {
+                        plugin.getLogger().warning("[PepperMinecart] 特殊矿车原版库存未能全部掉落，已保留库存交由原版 dropContents 兜底: "
+                                + cart.getUniqueId());
+                    }
                     current.remove();
-                    // 上下文重定向到新普通矿车：后续 giveItem/dropItem 落在有效实体上（旧实体已移除）
+                    // 上下文重定向到新普通矿车：后续 deliverItem/dropItem 落在有效实体上（旧实体已移除）
                     ctx.repoint(normal);
                 } else {
                     new CartBlockDisplay(current).clear();
@@ -426,8 +432,12 @@ public class CartEngine implements Listener {
                         "[PepperMinecart] 矿车类型 " + ctx.getType().getId() + " isContainerPickupControlled 异常，已跳过内容物倾倒: "
                                 + cart.getUniqueId(), ex);
             }
-            // 交给 giveItem 按本次取下策略统一分发（背包优先、溢出落地；DROP 直接落地）
-            ctx.giveItem(player, item, mode);
+            // 交给 ItemDelivery 按本次取下策略统一分发（背包优先、溢出落地；DROP 直接落地），
+            // 交付失败（掉落被取消/无位置）如实上报，避免把“已交付”当事实
+            if (!ctx.deliverItem(player, item, mode)) {
+                plugin.getLogger().warning("[PepperMinecart] 取下物品交付失败（掉落可能被其他插件取消或位置不可用）: "
+                        + cart.getUniqueId());
+            }
 
             if (config.soundTakeOff() && loc != null && loc.getWorld() != null) {
                 loc.getWorld().playSound(loc, Sound.BLOCK_STONE_BREAK, 1f, 1f);
@@ -440,10 +450,10 @@ public class CartEngine implements Listener {
         }
     }
 
-    /** 清空容器物品的内容物并全部掉落到矿车位置地面。 */
+    /** 清空容器物品的内容物并全部掉落到矿车位置地面；只有全部掉落成功才清空容器内容。 */
     private static void spillContainerContents(ItemStack item, Location loc) {
         if (loc == null || loc.getWorld() == null) {
-            return; // 位置/世界不可用，无法掉落内容物；至少不 NPE
+            return; // 位置/世界不可用，无法掉落内容物；保留物品中的容器内容，至少不 NPE 不丢物
         }
         if (!(item.getItemMeta() instanceof BlockStateMeta bsm)) {
             return;
@@ -451,14 +461,19 @@ public class CartEngine implements Listener {
         if (!(bsm.getBlockState() instanceof org.bukkit.block.Container container)) {
             return;
         }
+        List<ItemStack> contents = new ArrayList<>();
         for (ItemStack content : container.getInventory().getContents()) {
             if (content != null && !content.getType().isAir()) {
-                loc.getWorld().dropItemNaturally(loc, content);
+                contents.add(content);
             }
         }
-        container.getInventory().clear();
-        bsm.setBlockState(container);
-        item.setItemMeta(bsm);
+        if (ItemDelivery.dropAll(loc.getWorld(), loc, contents.toArray(ItemStack[]::new))
+                == ItemDelivery.Result.DELIVERED) {
+            container.getInventory().clear();
+            bsm.setBlockState(container);
+            item.setItemMeta(bsm);
+        }
+        // 掉落被取消时不清空：容器内容仍随返还物品保留，交由后续交付路径处理，绝不静默丢失
     }
 
     /**
@@ -466,28 +481,37 @@ public class CartEngine implements Listener {
      * <ul>
      *   <li>若返还物品已内嵌容器内容（BlockStateMeta 的 inventory 非空），说明内容已安全转移到
      *       返还物品，直接清空原版库存（随后 remove() 即便触发原版 dropContents 也读到空库存，不重复掉落）；</li>
-     *   <li>否则（返还物品未内嵌内容：DROP 策略已倾倒、异常路径等），必须先把原版库存逐格掉落到位置，
-     *       再清空，绝不能静默丢失。位置不可用时保留库存不清空，交由调用方/后续处理兜底。</li>
+     *   <li>否则必须先把原版库存逐格掉落，全部掉落成功才清空。任一掉落被取消或位置不可用时
+     *       保留库存不清空，交由原版 remove() 的 dropContents 或后续路径兜底，绝不静默清空。</li>
      * </ul>
+     *
+     * @return true 表示原版库存已被本方法安全清空
      */
-    private static void drainOrClearVanillaInventory(ItemStack returnedItem, Minecart cart, Location loc) {
+    private static boolean drainOrClearVanillaInventory(ItemStack returnedItem, Minecart cart, Location loc) {
         if (!(cart instanceof InventoryHolder holder)) {
-            return; // 非容器矿车（熔炉/TNT/命令矿车）无原版库存
+            return true; // 非容器矿车（熔炉/TNT/命令矿车）无原版库存
         }
         org.bukkit.inventory.Inventory inv = holder.getInventory();
         if (containsEmbeddedContents(returnedItem)) {
             inv.clear();
-            return;
+            return true;
         }
-        // 未内嵌内容：逐格掉落再清空
-        if (loc != null && loc.getWorld() != null) {
-            for (ItemStack content : inv.getContents()) {
-                if (content != null && !content.getType().isAir()) {
-                    loc.getWorld().dropItemNaturally(loc, content);
-                }
+        // 未内嵌内容：逐格掉落，全部成功才清空
+        if (loc == null || loc.getWorld() == null) {
+            return false;
+        }
+        List<ItemStack> contents = new ArrayList<>();
+        for (ItemStack content : inv.getContents()) {
+            if (content != null && !content.getType().isAir()) {
+                contents.add(content);
             }
         }
+        if (ItemDelivery.dropAll(loc.getWorld(), loc, contents.toArray(ItemStack[]::new))
+                != ItemDelivery.Result.DELIVERED) {
+            return false;
+        }
         inv.clear();
+        return true;
     }
 
     /** 返还物品的 BlockStateMeta 容器库存中是否已内嵌内容（非空）。 */

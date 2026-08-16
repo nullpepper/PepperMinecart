@@ -4,6 +4,7 @@ import com.pepperminecart.api.CartContext;
 import com.pepperminecart.api.CartTypeHandler;
 import com.pepperminecart.config.PluginConfig;
 import com.pepperminecart.container.CartSessionManager;
+import com.pepperminecart.delivery.ItemDelivery;
 import com.pepperminecart.storage.CartData;
 import java.util.ArrayList;
 import java.util.List;
@@ -83,16 +84,19 @@ public class DispenserCartHandler implements CartTypeHandler {
             if (ctx.hasCooldown(COOLDOWN)) {
                 return;
             }
-            ctx.setCooldown(COOLDOWN, config.dispenserCooldownTicks());
-            shoot(cart);
+            // 只有真实弹出物品才消耗冷却：空发射不消耗冷却机会
+            if (shoot(cart)) {
+                ctx.setCooldown(COOLDOWN, config.dispenserCooldownTicks());
+            }
             return;
         }
     }
 
-    private void shoot(Minecart cart) {
+    /** @return true 表示真的弹出了一个物品 */
+    private boolean shoot(Minecart cart) {
         // 若界面打开中，直接使用会话持有的实时容器引用（同一引用）编辑：
         // 此前对"重新反序列化快照"的扣减，会在玩家关闭界面时被陈旧快照覆盖回写，导致发射物品复制
-        Container live = sessions.liveContainer(cart);
+        Container live = sessions != null ? sessions.liveContainer(cart) : null;
         ItemStack blockItem = null;
         BlockStateMeta bsm = null;
         Dispenser dispenser;
@@ -101,10 +105,10 @@ public class DispenserCartHandler implements CartTypeHandler {
         } else {
             blockItem = CartData.getItem(cart);
             if (blockItem == null || !(blockItem.getItemMeta() instanceof BlockStateMeta m)) {
-                return;
+                return false;
             }
             if (!(m.getBlockState() instanceof Dispenser d)) {
-                return;
+                return false;
             }
             bsm = m;
             dispenser = d;
@@ -118,12 +122,34 @@ public class DispenserCartHandler implements CartTypeHandler {
             }
         }
         if (slots.isEmpty()) {
-            return;
+            return false;
         }
         int slot = slots.get(ThreadLocalRandom.current().nextInt(slots.size()));
         ItemStack stack = inv.getItem(slot);
         ItemStack single = stack.clone();
         single.setAmount(1);
+
+        Location loc = cart.getLocation();
+        if (loc == null) {
+            return false; // 实体已失效，无法安全发射：不改库存
+        }
+        loc = loc.clone().add(0, 0.4, 0);
+        double off = config.dispenserEjectOffset();
+        double dx = (ThreadLocalRandom.current().nextDouble() * 2 - 1) * off;
+        double dy = ThreadLocalRandom.current().nextDouble() * off * 0.5;
+        double dz = (ThreadLocalRandom.current().nextDouble() * 2 - 1) * off;
+        // 先掉落、成功后扣库存：掉落被取消（ItemSpawnEvent）时不产生物品也不扣容器，杜绝丢物
+        Item drop = ItemDelivery.dropItem(cart.getWorld(), loc.add(dx, dy, dz), single);
+        if (drop == null) {
+            return false;
+        }
+        Vector v = new Vector(ThreadLocalRandom.current().nextDouble() - 0.5,
+                ThreadLocalRandom.current().nextDouble() * 0.4 + 0.2,
+                ThreadLocalRandom.current().nextDouble() - 0.5).normalize();
+        drop.setVelocity(v.multiply(config.dispenserEjectSpeed()));
+        cart.getWorld().playSound(cart.getLocation(), Sound.BLOCK_DISPENSER_DISPENSE, 1f, 1f);
+
+        // 掉落成功后才扣减并持久化
         if (stack.getAmount() <= 1) {
             inv.setItem(slot, null);
         } else {
@@ -140,17 +166,6 @@ public class DispenserCartHandler implements CartTypeHandler {
             blockItem.setItemMeta(bsm);
             CartData.setItem(cart, blockItem);
         }
-
-        Location loc = cart.getLocation().clone().add(0, 0.4, 0);
-        double off = config.dispenserEjectOffset();
-        double dx = (ThreadLocalRandom.current().nextDouble() * 2 - 1) * off;
-        double dy = ThreadLocalRandom.current().nextDouble() * off * 0.5;
-        double dz = (ThreadLocalRandom.current().nextDouble() * 2 - 1) * off;
-        Item drop = cart.getWorld().dropItem(loc.add(dx, dy, dz), single);
-        Vector v = new Vector(ThreadLocalRandom.current().nextDouble() - 0.5,
-                ThreadLocalRandom.current().nextDouble() * 0.4 + 0.2,
-                ThreadLocalRandom.current().nextDouble() - 0.5).normalize();
-        drop.setVelocity(v.multiply(config.dispenserEjectSpeed()));
-        cart.getWorld().playSound(cart.getLocation(), Sound.BLOCK_DISPENSER_DISPENSE, 1f, 1f);
+        return true;
     }
 }
