@@ -79,7 +79,18 @@ final class AnvilCartSession extends VanillaCartSession {
         if (pending.isHandled()) {
             return;
         }
-        if (player.getOpenInventory().getTopInventory() == top) {
+        // 延迟 1 tick 期间玩家可能退出：离线后 getOpenInventory() 返回 null，必须先守卫，
+        // 否则对 null 解引用会 NPE。退出路径已由 onPlayerClose/onQuit 兜底处理。
+        if (!player.isOnline()) {
+            pendingTakes.remove(top);
+            return;
+        }
+        InventoryView open = player.getOpenInventory();
+        if (open == null) {
+            pendingTakes.remove(top);
+            return;
+        }
+        if (open.getTopInventory() == top) {
             ItemStack current = top.getItem(2);
             if (current != null && pending.clickedResult() != null && current.isSimilar(pending.clickedResult())) {
                 // 结果仍在原处：shift 进满背包等未真正取走，恢复 prepared 供后续点击再次判定

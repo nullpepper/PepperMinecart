@@ -106,13 +106,22 @@ public class CartSessionManager implements Listener {
     }
 
     /** 回写并关闭该矿车仍打开中的界面（取下/销毁前调用，防编辑丢失与幽灵界面）。
-     *  工作台/铁砧等原版虚拟界面每个玩家有独立 top Inventory/session，必须遍历全部会话关闭。 */
+     *  工作台/铁砧等原版虚拟界面每个玩家有独立 top Inventory/session，必须遍历全部会话关闭。
+     *  先移除登记再手动 onPlayerClose，保证同一会话只回写一次（closeInventory 同步触发的
+     *  onClose 不会再处理该会话）。 */
     public void flushAndClose(Minecart cart) {
-        flushContainer(cart);
         UUID id = cart.getUniqueId();
         for (CartSession s : new ArrayList<>(open.values())) {
             if (s.cart().getUniqueId().equals(id)) {
                 for (HumanEntity viewer : new ArrayList<>(s.top().getViewers())) {
+                    if (open.remove(viewer.getUniqueId()) == s && viewer instanceof Player player) {
+                        try {
+                            s.onPlayerClose(player);
+                        } catch (RuntimeException ex) {
+                            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                                    "[PepperMinecart] 关闭矿车界面时处理异常: " + viewer.getUniqueId(), ex);
+                        }
+                    }
                     viewer.closeInventory();
                 }
             }
