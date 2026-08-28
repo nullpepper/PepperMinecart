@@ -1,19 +1,19 @@
 # Doublecheck spec
 
 ## Goal
-对 PepperMinecart 上一轮审查发现的 9 项问题逐一修复并补充回归测试，最终 ./gradlew build 通过且测试 0 失败 0 错误。
+仅修改服务端已部署的 config.yml，杜绝玩家通过矿车系统获得携带 NBT 的非原版容器物品（如"带库存的箱子/漏斗"），不引入代码改动、不重启服务器。
 
 ## Scope
-只修改与 9 项问题直接相关的主代码、测试和 README；允许在相关类内做适度重复代码重构（如 recoverLeftovers 与 closeWithoutPlayer 的公共逻辑）；不重写整体架构，不改无关文件。
+改 /opt/docker/minecraft/mc/data/plugins/PepperMinecart/config.yml 两处：container-pickup-policy 置 DROP；vanilla-carts.allow-pickup 置 false。随后 /pm reload 热重载生效。不改源码、不改项目仓库默认 config.yml。
 
 ## Acceptance criteria
-9 项修复全部落地；新增/修改测试覆盖：受保护类型注销/覆盖被拒、离线会话兜底关闭、注册表注销原子性、null 策略与 null onTakeOff 结果、重扫清理失效 context、事件入口 PDC 异常安全、普通矿车提交段异常屏障、铁砧报废缓存 world/loc；./gradlew build 成功且全量测试 0 失败 0 错误。
+①config.yml 中 container-pickup-policy: DROP 且 vanilla-carts.allow-pickup: false（含注释说明）；②/ pm reload 成功且 latest.log 无配置解析告警；③行为正确：木桶/投掷器/通用容器矿车潜行取下→内容物落地、裸容器物品归还（无 NBT 内容）；原版特殊矿车（箱子/漏斗/熔炉等）潜行取下被取消；破坏特殊矿车仍为原版掉落（Minecart with Chest 等原版物品+内容物分离）。
 
 ## Failure modes
-修复若与现有防复制/回滚语义冲突，采取保守处理保留原行为并记录；构建或测试失败时停止继续扩大改动，先修复失败；第三方 handler 异常或 null 输入不得逃出事件链；回滚/提交阶段的异常必须被隔离并清理 context。
+配置值拼写/格式错误→插件回退默认 PICKUP/true 并打告警，保护静默失效（reload 后须检查无告警）；reload 时存在打开中的容器界面→会话机制正常回写；RCON 不可用→回退 docker restart 生效；特殊矿车禁止取下后玩家无法以物品形式取回箱子/内容→内容仍可经原版界面访问，破坏矿车按原版掉落（可接受，符合策略诉求）。
 
 ## Priorities
-正确性与测试绿优先于代码风格；可接受较大 diff 以换取清晰代码；低风险项允许简化但必须可验证；允许重构相关重复代码，但不引入新依赖或改变公开 API。
+安全策略优先于便捷（内容落地/禁取优先于保留 NBT 物品）；配置改动优先于代码改动；热重载优先于重启以不打扰在线玩家；保持潜影盒原版行为（其携带内容属原版可获得物品）。
 
 ## Non-goals
-不修改与 9 项无关的文件；不重写整体架构；不改变现有公开 API 契约（除非某修复不得不做，并需测试确认）。
+不改源码；不改项目仓库默认 config.yml；不追溯清理存量世界中已有矿车/玩家背包已存在的 NBT 容器物品（无可行手段）；不禁用整个矿车系统；不改变潜影盒取下语义；不改变特殊矿车被破坏时的原版掉落。
