@@ -31,6 +31,10 @@ Minecraft **Paper 1.21+** 服务端插件：把方块放到矿车上，实现**�
 
 所有配置项在 `config.yml` 中均有中文注释，修改后执行 `/pm reload` 热重载，无需重启。
 
+> 前置：需安装 **PepperLib ≥ 0.14.0**（配置体系由它提供）；文件装载/注释/校验/升级统一走
+> PepperLib `ConfigFileStore`——首跑材质化带注释默认文件，此后只读绑定、不动盘。
+> 插件自身不打包 lib 类（前置模式）。
+
 ```yaml
 take-off-mode: INVENTORY      # 取下策略（所有方块统一，无例外）：INVENTORY 进背包 | DROP 落地 | DISABLED 禁止取下
 allow-all-blocks: true        # true=除黑名单外全部允许；false=仅允许白名单

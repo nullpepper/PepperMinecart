@@ -1,10 +1,12 @@
 name: PepperMinecart
 version: '${version}'
-main: com.pepperminecart.PepperMinecartPlugin
+main: ltd.pepper.pepperminecart.PepperMinecartPlugin
 api-version: '1.21'
 folia-supported: false
 description: 移动工作站与移动仓库 —— 把方块放到矿车上
 authors: [PepperMinecart]
+# 前置插件模式：PepperLib.jar 提供配置绑定/运行时存储，须先于本插件加载（单实例，绝不 shade）
+depend: [PepperLib]
 
 commands:
   pepperminecart:

@@ -2,6 +2,30 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循语义化版本。
 
+## [未发布] - 配置层迁移
+
+### 变更
+- 配置层迁移到 PepperLib 0.13.0 自研 `@ConfigModel` 体系：
+  `PluginConfig` 改为 facade（`ConfigFileStore` + volatile `MinecartConfigModel`），
+  `plugin.yml` 加 `depend: [PepperLib]`，`pepperlib-api.properties` 注入版本并挂
+  `verifyPepperLibVersion` 门；默认 `config.yml` 由模型出货（带注释，键名逐字不变）。
+- 行为等价：数值字段夹紧语义（`@ConfigRange(clamp=true)`）、枚举大小写不敏感、
+  材质黑/白名单 post-load 解析（未知材质 WARN 跳过）均与旧 `intInRange/doubleInRange/
+  parseEnum/parseMaterials` 一致；默认值等价测试守护。
+- 附带修复：BuildArtifactContractTest 断言重定位路径由 `com/.../bstats` 改为
+  `ltd.pepper.pepperminecart.libs.bstats`（存量断言错，非迁移引入）。
+- **配置接线收口到 PepperLib 0.14.0**（对齐 PepperTreeCut M22）：
+  - 去掉启动期 `saveDefaultConfig()` + 二次 `config.reload()`——主树文件生命周期完全由
+    `ConfigFileStore` 承担（构造即 copy-once 材质化 + 注释文档 + 绑定 + post-load），
+    启动只读盘一次、告警不再重复；
+  - `PluginConfig` 暴露 store 面：`store()`（注释读写 / `upgrade` 补键）、`values()`
+    （每键 PRESENT/MISSING/INVALID 值级信号）、`migrated()`（版本分叉标记）；
+  - Minecart 无版本链（`config.yml` 无 `configVersion`，按家族规范视为 v1），故未注册
+    `ConfigMigration`：`migrated()` 恒 false，未来引入版本链时再注册；
+  - 新增 `MinecartConfigStoreTest` 6 例：首跑材质化 + copy-once 不覆盖、注释查询/编辑、
+    值级信号（缺失 MISSING / 类型不符 INVALID 且静默）、`set` 即时重绑定、
+    显式 `upgrade` 补键 + 备份、损坏文件回落默认不抛异常。
+
 ## [1.0.0] - 2026-08-18
 
 ### 新增
