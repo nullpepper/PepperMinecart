@@ -116,13 +116,15 @@ class ProtectionGatewayTest {
 
                 assertEquals(eventDeny || claimDeny, g.denyPlace(null, null),
                         "BOTH：events=" + eventDeny + " claim=" + claimDeny + " 应任一拒即拒");
-                assertTrue(events.consulted() && claim.consulted(), "BOTH 档两个策略都必须被咨询");
+                assertTrue(claim.consulted(), "BOTH 档必须先咨询 Claim 策略");
+                assertEquals(!claimDeny, events.consulted(),
+                        "Claim 已拒 → 短路（不把同一次拦截交给第二条通道）；Claim 未拒 → 继续咨询伪事件");
             }
         }
     }
 
     @Test
-    void bothBackendSecondStrategyStillConsultedWhenFirstDenies() {
+    void bothBackendShortCircuitsAfterFirstDeny() {
         Fake events = new Fake();
         Fake claim = new Fake();
         events.placeDenied = true;
@@ -131,7 +133,8 @@ class ProtectionGatewayTest {
         ProtectionGateway g = gateway(ProtectionBackend.BOTH, true, events, claim);
 
         assertTrue(g.denyPlace(null, null));
-        assertTrue(claim.consulted(), "前一策略已拒时后一策略仍应被咨询（口径一致，不做短路）");
+        assertTrue(claim.consulted(), "Claim 策略先被咨询");
+        assertFalse(events.consulted(), "已拒即短路：同一次拦截不得被两条通道各计数/各提示一次");
     }
 
     @Test
@@ -180,8 +183,7 @@ class ProtectionGatewayTest {
         assertTrue(g.denyOpenGui(null, null, Material.CRAFTING_TABLE), "策略把关该材质且拒 → 拒");
         assertEquals(List.of("use:CRAFTING_TABLE", "denied:table"), claim.calls,
                 "界面闸先按材质路由旗标，再以该 id 判定");
-        assertEquals(List.of("use:CRAFTING_TABLE"), events.calls,
-                "事件策略的 blockUseFlag 恒空：被问了材质但不会产生 denied 调用");
+        assertEquals(List.of(), events.calls, "Claim 已拒 → 短路，不再问事件策略（其 blockUseFlag 恒空）");
     }
 
     @Test

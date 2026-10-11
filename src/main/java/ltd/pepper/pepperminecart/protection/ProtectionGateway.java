@@ -3,6 +3,7 @@ package ltd.pepper.pepperminecart.protection;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.function.BooleanSupplier;
+import java.util.function.Predicate;
 import java.util.function.Supplier;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -14,7 +15,7 @@ import org.bukkit.entity.Player;
  * <ul>
  *   <li>{@code EVENTS} → 只咨询 {@link BukkitEventProtection}（今天的行为）；</li>
  *   <li>{@code PEPPERCLAIM} → 只咨询 {@link PepperClaimProtection}；</li>
- *   <li>{@code BOTH}（默认）→ 两个都咨询，<b>任一拒即拒</b>。</li>
+ *   <li>{@code BOTH}（默认）→ 先问 PepperClaim、再问伪事件；<b>首个拒绝即返回</b>（短路）。</li>
  * </ul>
  *
  * <p>{@code respect-protection: false} 时**所有**闸短路放行（含本次新接入的盲区）——保持该配置
@@ -22,6 +23,11 @@ import org.bukkit.entity.Player;
  *
  * <p>策略由外部注入（便于以假实现做纯 JVM 测试）；配置值经 {@link BooleanSupplier}/
  * {@link Supplier} 实时读取，故 {@code /pm reload} 后立即生效。</p>
+ *
+ * <p><b>为什么短路</b>：两条通道都会把拒绝反馈给玩家并计入属主统计（Claim 通道经
+ * {@code ClaimApi.denied} 发节流文案 + 计数；伪事件通道最终由对方的方块事件监听器计数）。
+ * 同一次动作若两条都跑，属主统计会**双计**、玩家也可能收到两条不同措辞的提示。故一旦某条通道
+ * 已判拒，动作已确定被拦，后一条不再咨询——判定结论不变，只去掉重复副作用。</p>
  *
  * <p><b>只问这四个动作（不重复判上游）</b>：矿车语义下的保护判定点收敛为「放置」「取下」「打开
  * 矿车上的虚拟方块界面」「环境来源弹出」四处。其余动作刻意不再判：</p>
@@ -57,15 +63,7 @@ public final class ProtectionGateway {
         if (!respectProtection.getAsBoolean()) {
             return false;
         }
-        ProtectionBackend b = backend.get();
-        boolean denied = false;
-        if (consultsEvents(b)) {
-            denied = events.denied(player, location, ClaimProtection.FLAG_PLACE);
-        }
-        if (consultsClaim(b)) {
-            denied |= claim.denied(player, location, ClaimProtection.FLAG_PLACE);
-        }
-        return denied;
+        return deniedByAny(s -> s.denied(player, location, ClaimProtection.FLAG_PLACE));
     }
 
     /** 从矿车取下方块。 */
@@ -73,15 +71,7 @@ public final class ProtectionGateway {
         if (!respectProtection.getAsBoolean()) {
             return false;
         }
-        ProtectionBackend b = backend.get();
-        boolean denied = false;
-        if (consultsEvents(b)) {
-            denied = events.denied(player, location, ClaimProtection.FLAG_DESTROY);
-        }
-        if (consultsClaim(b)) {
-            denied |= claim.denied(player, location, ClaimProtection.FLAG_DESTROY);
-        }
-        return denied;
+        return deniedByAny(s -> s.denied(player, location, ClaimProtection.FLAG_DESTROY));
     }
 
     /**
@@ -92,15 +82,7 @@ public final class ProtectionGateway {
         if (!respectProtection.getAsBoolean()) {
             return false;
         }
-        ProtectionBackend b = backend.get();
-        boolean denied = false;
-        if (consultsEvents(b)) {
-            denied = guiDenied(events, player, location, material);
-        }
-        if (consultsClaim(b)) {
-            denied |= guiDenied(claim, player, location, material);
-        }
-        return denied;
+        return deniedByAny(s -> guiDenied(s, player, location, material));
     }
 
     /** 环境来源（机器/物理机制，无玩家语境）驱动的动作：发射器矿车压充能激活轨弹出物品。 */
@@ -108,15 +90,19 @@ public final class ProtectionGateway {
         if (!respectProtection.getAsBoolean()) {
             return false;
         }
+        return deniedByAny(s -> s.environmentDenied(location, ClaimProtection.FLAG_ENVIRONMENT_EJECT));
+    }
+
+    /**
+     * 按档位依次咨询策略，**首个拒绝即返回**：先 PepperClaim（精确通道：按材质路由旗标、带节流文案
+     * 与属主计数），后伪事件（兼容其它保护插件）。任一策略未被本档位选中则跳过。
+     */
+    private boolean deniedByAny(Predicate<ClaimProtection> ask) {
         ProtectionBackend b = backend.get();
-        boolean denied = false;
-        if (consultsEvents(b)) {
-            denied = events.environmentDenied(location, ClaimProtection.FLAG_ENVIRONMENT_EJECT);
+        if (consultsClaim(b) && ask.test(this.claim)) {
+            return true;
         }
-        if (consultsClaim(b)) {
-            denied |= claim.environmentDenied(location, ClaimProtection.FLAG_ENVIRONMENT_EJECT);
-        }
-        return denied;
+        return consultsEvents(b) && ask.test(this.events);
     }
 
     private static boolean guiDenied(ClaimProtection strategy, Player player, Location location, Material material) {
