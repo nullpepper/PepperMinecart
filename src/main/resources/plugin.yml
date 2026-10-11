@@ -7,6 +7,9 @@ description: 移动工作站与移动仓库 —— 把方块放到矿车上
 authors: [PepperMinecart]
 # 前置插件模式：PepperLib.jar 提供配置绑定/运行时存储，须先于本插件加载（单实例，绝不 shade）
 depend: [PepperLib]
+# 软依赖：PepperClaim 提供领地保护判定（ClaimApi）。未安装时按配置降级（默认 BOTH → 退化为伪事件策略），
+# 绝不因缺失而拒绝启用。类加载期由 softdepend 决定可见性（compileOnly 只提供编译期签名）。
+softdepend: [PepperClaim]
 
 commands:
   pepperminecart:

@@ -13,6 +13,7 @@ import ltd.pepper.lib.config.IssueCollector;
 import ltd.pepper.lib.config.IssueLevel;
 import ltd.pepper.lib.yaml.YamlMap;
 import ltd.pepper.pepperminecart.api.TakeOffResult;
+import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import org.bukkit.Material;
 import org.bukkit.plugin.java.JavaPlugin;
 
@@ -174,6 +175,14 @@ public class PluginConfig {
 
     public boolean respectProtection() {
         return current.respectProtection;
+    }
+
+    /**
+     * 领地保护后端档位（{@code PEPPERCLAIM | EVENTS | BOTH}，默认 {@code BOTH}）。
+     * 非法值由绑定层回落默认值并记 WARN（见 {@link ProtectionBackend}）。
+     */
+    public ProtectionBackend protectionBackend() {
+        return current.protectionBackend;
     }
 
     public int displayBlockOffset() {

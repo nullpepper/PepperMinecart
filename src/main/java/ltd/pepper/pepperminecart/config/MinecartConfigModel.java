@@ -15,6 +15,7 @@ import ltd.pepper.lib.config.ConfigRange;
 import ltd.pepper.lib.config.IssueCollector;
 import ltd.pepper.lib.config.IssueLevel;
 import ltd.pepper.pepperminecart.api.TakeOffResult;
+import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import org.bukkit.Material;
 
 /**
@@ -67,6 +68,16 @@ public class MinecartConfigModel {
     })
     @ConfigPath("respect-protection")
     boolean respectProtection = true;
+
+    @ConfigComment({
+        "领地保护后端档位（总开关关闭时本项无意义，全部放行）：",
+        "  PEPPERCLAIM - 只问 PepperClaim（官方联动 API；未安装/未就绪则一律放行）",
+        "  EVENTS      - 只发伪方块事件（PlaceEvent/BreakEvent 模拟，历史行为，兼容旧保护插件）",
+        "  BOTH        - 两者都问，任一拒即拒（默认；未装 PepperClaim 时等价 EVENTS）",
+        "非法值按 BOTH 处理并在启动/重载时记 WARN。"
+    })
+    @ConfigPath("protection-backend")
+    ProtectionBackend protectionBackend = ProtectionBackend.BOTH;
 
     @ConfigComment("方块在矿车上的显示高度（单位 1/16 格），根据视觉效果调整")
     @ConfigRange(min = 0, max = 16, clamp = true)

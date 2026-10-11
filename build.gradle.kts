@@ -20,6 +20,13 @@ dependencies {
     // 版本单一来源：gradle.properties 的 pepperLibVersion。
     compileOnly("ltd.pepper:pepper-lib:${property("pepperLibVersion")}")
 
+    // PepperClaim 联动瘦包（libs/PepperClaim-linkage-v1.jar）：**编译期基线，运行时零耦合**。
+    // 只在编译期提供 ltd.pepper.claim.ClaimApi 的签名，绝不 shade / 不 relocate：运行期由
+    // 服务器上的 PepperClaim.jar 经软依赖（plugin.yml softdepend）提供这些类；
+    // PepperClaim 未安装时相关类不可加载，PepperClaimProtection 按「未就绪 → 放行」降级。
+    compileOnly(files("libs/PepperClaim-linkage-v1.jar"))
+    testImplementation(files("libs/PepperClaim-linkage-v1.jar"))
+
     // 测试源集需要显式声明 API（测试运行于纯 JVM，仅使用 API 级类）
     testImplementation("io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT")
     testImplementation("org.mockbukkit.mockbukkit:mockbukkit-v1.21:4.45.0")

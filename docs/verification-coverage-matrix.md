@@ -130,3 +130,15 @@
 
 - 首轮新增测试有 2 个失败，均为**测试假设错误**而非产品缺陷：① MockBukkit `openEnchanting` 未实现；② 外来箱子矿车取下时内容物在 MockBukkit 中随 `BlockStateMetaMock` 内嵌回收（0 地面掉落），与"真实 Paper 上无模板外来矿车返回无 meta 物品→内容物预掉落"的代码推断路径不同。断言已改为两条合法路径都成立的不变量"钻石总量 = 3（不丢失、不复制）"。
 - 首轮冒烟曾误用默认端口 25565，因该端口已有服务监听而**立即绑定失败并停止**，未对既有服务造成任何影响；后续冒烟全部改用 25599/25598 隔离端口。
+
+## 六、后续变更（2026-10-11）：领地保护接入 PepperClaim（本报告第一节「保护」行已扩展）
+
+- 保护判定不再只有「伪造原版方块事件」一条路：新增可插拔保护后端（`protection-backend`，
+  默认 `BOTH`）——`PepperClaimProtection`（官方联动 API `ClaimApi`）+ `BukkitEventProtection`
+  （历史伪事件，`EVENTS` 档与旧行为逐条等价）。矩阵第 23 行的「放置/取下 + 伪事件」仍成立，
+  但**不再是全部**：另补「打开矿车虚拟界面」与「发射器环境弹出」两处闸。
+- 测试落点：`protection/ProtectionGatewayTest`、`protection/PepperClaimProtectionTest`、
+  `InteractionProtectionGateTest`、`CartProtectionEventTest`（EVENTS 档等价）、`PluginSmokeTest`（后端日志措辞）。
+- 本节之前记录的缺口 #6（发射器 onMove）已有定向覆盖：`InteractionProtectionGateTest` 经充能激活轨驱动
+  `onMove`，验证环境弹出闸的开/关行为（MockBukkit 的激活铁轨方块数据不实现 `RedstoneRail`，
+  测试以动态代理提供该数据）。

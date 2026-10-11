@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import ltd.pepper.pepperminecart.api.TakeOffResult;
+import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -94,6 +95,7 @@ class PluginConfigTest {
         assertTrue(config.allowAllBlocks());
         assertTrue(config.isBlockAllowed(Material.DIAMOND_BLOCK));
         assertTrue(config.respectProtection());
+        assertEquals(ProtectionBackend.BOTH, config.protectionBackend(), "保护后端默认应为 BOTH");
         assertEquals(6, config.displayBlockOffset());
         assertEquals(250, config.interactionCooldownMs());
         assertTrue(config.soundPlace());
@@ -113,6 +115,7 @@ class PluginConfigTest {
         values.put("allow-all-blocks", false);
         values.put("enabled-blocks", List.of("CHEST", "BARREL"));
         values.put("respect-protection", false);
+        values.put("protection-backend", "EVENTS");
         values.put("display-block-offset", 3);
         values.put("interaction-cooldown-ms", 100);
         values.put("sounds.place", false);
@@ -129,6 +132,7 @@ class PluginConfigTest {
         assertTrue(config.isBlockAllowed(Material.CHEST));
         assertFalse(config.isBlockAllowed(Material.DIAMOND_BLOCK));
         assertFalse(config.respectProtection());
+        assertEquals(ProtectionBackend.EVENTS, config.protectionBackend());
         assertEquals(3, config.displayBlockOffset());
         assertEquals(100, config.interactionCooldownMs());
         assertFalse(config.soundPlace());

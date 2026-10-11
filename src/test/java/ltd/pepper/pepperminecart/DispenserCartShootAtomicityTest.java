@@ -111,7 +111,7 @@ class DispenserCartShootAtomicityTest {
         ItemStack blockItem = new ItemStack(Material.DISPENSER, 1);
         blockItem.setItemMeta(new BlockStateMetaMock(Material.DISPENSER));
 
-        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions());
+        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions(), plugin.protectionGateway());
         plugin.engine().addCart(cart, handler, blockItem);
         CartContextImpl ctx = plugin.engine().context(cart);
 
@@ -145,7 +145,7 @@ class DispenserCartShootAtomicityTest {
         ItemStack blockItem = new ItemStack(Material.DISPENSER, 1);
         blockItem.setItemMeta(new BlockStateMetaMock(Material.DISPENSER));
 
-        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions());
+        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions(), plugin.protectionGateway());
         plugin.engine().addCart(cart, handler, blockItem);
         CartContextImpl ctx = plugin.engine().context(cart);
 
@@ -189,7 +189,7 @@ class DispenserCartShootAtomicityTest {
         ItemStack blockItem = new ItemStack(Material.DISPENSER, 1);
         blockItem.setItemMeta(new BlockStateMetaMock(Material.DISPENSER));
 
-        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions());
+        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions(), plugin.protectionGateway());
         plugin.engine().addCart(cart, handler, blockItem);
         CartContextImpl ctx = plugin.engine().context(cart);
 
@@ -238,7 +238,7 @@ class DispenserCartShootAtomicityTest {
         ItemStack blockItem = new ItemStack(Material.DISPENSER, 1);
         blockItem.setItemMeta(new BlockStateMetaMock(Material.DISPENSER));
 
-        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions());
+        DispenserCartHandler handler = new DispenserCartHandler(plugin.pluginConfig(), plugin.sessions(), plugin.protectionGateway());
         plugin.engine().addCart(cart, handler, blockItem);
         CartContextImpl ctx = plugin.engine().context(cart);
 

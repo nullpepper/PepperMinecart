@@ -40,7 +40,10 @@ take-off-mode: INVENTORY      # 取下策略（所有方块统一，无例外）
 allow-all-blocks: true        # true=除黑名单外全部允许；false=仅允许白名单
 disabled-blocks: [BEDROCK, BARRIER]
 enabled-blocks: []
-respect-protection: true      # 与领地插件协作（模拟方块放置/破坏事件）
+respect-protection: true      # 与领地插件协作（总开关；false = 全部放行，不受任何领地限制）
+protection-backend: BOTH      # 保护后端：PEPPERCLAIM 只问 PepperClaim 联动 API | EVENTS 只发伪方块事件
+                              # （历史行为，兼容旧保护插件）| BOTH 两者都问、任一拒即拒（默认，
+                              # 未装 PepperClaim 时等价 EVENTS）
 display-block-offset: 6       # 显示方块高度（1/16 格），按视觉效果调整
 interaction-cooldown-ms: 250  # 交互冷却
 sounds: { place: true, take-off: true }
@@ -71,7 +74,15 @@ dispenser-cart:               # 发射器矿车
 - 容器内容与业务数据存实体 PDC（`pepperminecart:*`），点击界面实时回写。
 - 矿车被破坏：普通方块矿车掉落方块物品与容器内容；原版特殊矿车由原版按设计掉落合并物品（如 `Minecart with Chest`）与内容物，不丢失。
 - 挂有方块的矿车禁止玩家/生物乘坐（扩展类型可通过 `allowRiding()` 开放，见下）。
-- 与领地插件协作：开启 `respect-protection` 后，放置/取下会模拟 `BlockPlaceEvent`/`BlockBreakEvent`，被其他插件取消则禁止操作。
+- 与领地合作：
+  - **PepperClaim（推荐）**：安装后本插件经其官方联动 API（`ClaimApi`）问领地保护，判定与拒绝反馈
+    与 PepperClaim 自身事件路径同源（不绕开属主拒绝计数与节流文案）。受闸动作为**放置、取下、
+    打开矿车虚拟界面、发射器矿车环境弹出**；`protection-backend` 可选 `BOTH`（默认）/`PEPPERCLAIM`/`EVENTS`。
+    启动时会打印一行后端日志（实机冒烟观察点）：`[PepperMinecart] 领地保护后端: …`。
+  - **其它领地插件**：`protection-backend` 含 `EVENTS`（默认即含）时，放置/取下仍会模拟
+    `BlockPlaceEvent`/`BlockBreakEvent`（并携带矿车语义事件 `CartBlockPlaceEvent`/`CartBlockTakeOffEvent`），
+    被取消则禁止操作 —— 与历史行为逐条等价。
+  - `respect-protection: false` 关闭全部领地判定（含上述新接入的动作）。
 
 ## 扩展指南：新增矿车类型
 

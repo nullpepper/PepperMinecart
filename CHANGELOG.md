@@ -2,9 +2,40 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循语义化版本。
 
-## [未发布] - 配置层迁移
+## [未发布] - 领地保护接入与配置层迁移
+
+### 新增
+- **真正接入 PepperClaim 领地保护**（取代此前唯一手段「伪造原版方块事件」）：经官方联动 API
+  `ltd.pepper.claim.ClaimApi` 问判定。`libs/PepperClaim-linkage-v1.jar` 作 **compileOnly 编译期
+  基线（运行时零耦合，绝不 shade / 不 relocate）**，`plugin.yml` 加 `softdepend: [PepperClaim]`；
+  判定与拒绝反馈与 PepperClaim 事件路径**同源**（属主拒绝计数 + 节流文案），玩家侧不可区分，
+  也不会绕开属主统计。未安装 / 未就绪 PepperClaim 时一律放行（零行为变化）。
+- 保护后端抽象（新包 `ltd.pepper.pepperminecart.protection`）：端口 `ClaimProtection`
+  + `PepperClaimProtection`（ClaimApi 后端）+ `BukkitEventProtection`（历史伪事件后端）
+  + 组合根 `ProtectionGateway`；两策略由外部注入，便于纯 JVM 假实现测试。
+- 新配置项 `protection-backend: PEPPERCLAIM | EVENTS | BOTH`（默认 **BOTH**；非法值回落 BOTH + WARN）。
+- 启动可观测日志（实机冒烟唯一观察点）：
+  `[PepperMinecart] 领地保护后端: <档位>；…` —— 检测到 PepperClaim 报 `PepperClaim 联动 READY`，
+  未检测到则明确写出降级（`PEPPERCLAIM` 档写「无保护插件可用」）。
+- 补齐两处此前**完全没问保护**的盲区：
+  1. 打开矿车上的虚拟方块界面（工作站/铁砧/容器/发射器矿车）：按矿车上的方块材质路由旗标
+     （`ClaimApi#blockUseFlag` → `table`/`anvil`/`container`/`loom`/…），被拒则取消交互且不打开界面；
+     只对插件自管普通矿车生效（原版箱/漏斗矿车由 PepperClaim 自身监听器把关，**不双判**）。
+  2. 发射器矿车压充能激活轨弹出物品：环境来源（无玩家语境）按领地级旗标 `mobgriefing` 判定，
+     被拒则不弹出（不扣库存、不消耗冷却）。
 
 ### 变更
+- 放置/取下的保护判定改经 `ProtectionGateway`：`EVENTS` 档与旧行为**逐条等价**
+  （自有 `CartBlockPlaceEvent`/`CartBlockTakeOffEvent` + 伪造 `BlockPlaceEvent`/`BlockBreakEvent`；
+  拿不到位置/发起者仍按拒绝处理），由测试逐条守护；`BOTH`/`PEPPERCLAIM` 档额外问 ClaimApi。
+- `respect-protection: false` 语义不变：所有闸（含新增盲区）一律短路放行。
+- 刻意**不补**的盲区及理由（均为「已被闸的上游动作的后果」，按 PepperClaim「上游判定一次、
+  不重复判」模型，避免重复计数与重复提示）：铁砧耐久/报废（开铁砧界面的后果）、特殊矿车转换
+  （放置的后果）、显示方块增删（放置/取下的后果）、工作站残留物交付（开界面的后果）、
+  容器内容编辑与回写（开容器界面的后果）、矿车破坏补掉（PepperClaim 自身 `vehicledestroy`
+  路径已闸）、乘坐/穿行（PepperClaim `riding`/`boarding` 路径已闸）。
+
+### 变更（配置层迁移）
 - 配置层迁移到 PepperLib 0.13.0 自研 `@ConfigModel` 体系：
   `PluginConfig` 改为 facade（`ConfigFileStore` + volatile `MinecartConfigModel`），
   `plugin.yml` 加 `depend: [PepperLib]`，`pepperlib-api.properties` 注入版本并挂

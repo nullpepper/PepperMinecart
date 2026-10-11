@@ -8,7 +8,9 @@ import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import ltd.pepper.lib.config.Bindings;
 import ltd.pepper.lib.config.IssueCollector;
+import ltd.pepper.lib.config.IssueLevel;
 import ltd.pepper.lib.yaml.YamlMap;
+import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import org.junit.jupiter.api.Test;
 
 /**
@@ -32,6 +34,23 @@ class MinecartConfigModelTest {
         java.util.Map<String, Object> shipped = YamlMap.parse(resource("/config.yml"));
         java.util.Map<String, Object> model = YamlMap.parse(emitted);
         assertEquals(shipped, model, "模型出货默认文件与发布 config.yml 逐键相等");
+    }
+
+    @Test
+    void unknownBackendValueFallsBackToBothWithWarning() throws IOException {
+        IssueCollector issues = new IssueCollector();
+        MinecartConfigModel m = Bindings.load(
+                MinecartConfigModel.class,
+                YamlMap.parse(resource("/config.yml")
+                        .replace("protection-backend: BOTH", "protection-backend: VANILLA")),
+                issues,
+                MinecartConfigModel::resolve);
+
+        assertEquals(ProtectionBackend.BOTH, m.protectionBackend, "未知档位回落默认 BOTH");
+        assertTrue(
+                issues.issues().stream()
+                        .anyMatch(i -> i.path().contains("protection-backend") && i.level() == IssueLevel.WARN),
+                "未知档位应有 WARN 级提示（回落而非静默）: " + issues.issues());
     }
 
     @Test

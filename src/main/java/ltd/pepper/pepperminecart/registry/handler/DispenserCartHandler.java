@@ -5,6 +5,7 @@ import ltd.pepper.pepperminecart.api.CartTypeHandler;
 import ltd.pepper.pepperminecart.config.PluginConfig;
 import ltd.pepper.pepperminecart.container.CartSessionManager;
 import ltd.pepper.pepperminecart.delivery.ItemDelivery;
+import ltd.pepper.pepperminecart.protection.ProtectionGateway;
 import ltd.pepper.pepperminecart.storage.CartData;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,10 +41,12 @@ public class DispenserCartHandler implements CartTypeHandler {
 
     private final PluginConfig config;
     private final CartSessionManager sessions;
+    private final ProtectionGateway protection;
 
-    public DispenserCartHandler(PluginConfig config, CartSessionManager sessions) {
+    public DispenserCartHandler(PluginConfig config, CartSessionManager sessions, ProtectionGateway protection) {
         this.config = config;
         this.sessions = sessions;
+        this.protection = protection;
     }
 
     @Override
@@ -87,6 +90,11 @@ public class DispenserCartHandler implements CartTypeHandler {
             }
             if (!(b.getBlockData() instanceof RedstoneRail rail) || !rail.isPowered()) {
                 continue;
+            }
+            // 环境来源闸：压过充能激活轨的弹出没有任何玩家语境（判定主体是机器），
+            // 按「环境来源只读领地级旗标」的口径问保护（mobgriefing）——被拒则不弹出、不消耗冷却。
+            if (protection.denyEnvironmentEject(cart.getLocation())) {
+                return;
             }
             // 只有真实弹出物品才消耗冷却：空发射不消耗冷却机会
             if (shoot(cart)) {

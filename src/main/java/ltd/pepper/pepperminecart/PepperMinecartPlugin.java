@@ -9,6 +9,10 @@ import ltd.pepper.pepperminecart.cooldown.InteractionCooldown;
 import ltd.pepper.pepperminecart.engine.CartEngine;
 import ltd.pepper.pepperminecart.impl.PepperMinecartAPIImpl;
 import ltd.pepper.pepperminecart.interaction.InteractionListener;
+import ltd.pepper.pepperminecart.protection.BukkitEventProtection;
+import ltd.pepper.pepperminecart.protection.PepperClaimProtection;
+import ltd.pepper.pepperminecart.protection.ProtectionBackend;
+import ltd.pepper.pepperminecart.protection.ProtectionGateway;
 import ltd.pepper.pepperminecart.registry.CartTypeRegistry;
 import ltd.pepper.pepperminecart.registry.handler.AnvilHandler;
 import ltd.pepper.pepperminecart.registry.handler.ContainerHandler;
@@ -19,6 +23,7 @@ import ltd.pepper.pepperminecart.registry.handler.WorkstationHandler;
 import org.bstats.bukkit.Metrics;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
+import org.bukkit.scheduler.BukkitTask;
 
 /** PepperMinecart 主类：加载配置、注册内置矿车类型、启动引擎与监听器、注册对外服务。
  *  注意：类不可声明为 final —— MockBukkit 以 ByteBuddy 子类化主类加载插件。 */
@@ -27,10 +32,15 @@ public class PepperMinecartPlugin extends JavaPlugin {
     /** bStats 插件 ID：在 https://bstats.org 注册后替换（0 = 暂不启用统计）。 */
     private static final int BSTATS_PLUGIN_ID = 0;
 
+    /** 联动尾部观测节奏（tick）：每 1 秒查一次，最多 15 次（约 15 秒）。 */
+    private static final long LINKAGE_RECHECK_PERIOD_TICKS = 20L;
+    private static final int LINKAGE_RECHECK_ATTEMPTS = 15;
+
     private PluginConfig config;
     private CartEngine engine;
     private CartSessionManager sessions;
     private AnvilDamageTracker anvilTracker;
+    private ProtectionGateway protection;
 
     // ---- 内部访问器（测试与引擎内部装配用，非公开 API） ----
 
@@ -50,12 +60,25 @@ public class PepperMinecartPlugin extends JavaPlugin {
         return anvilTracker;
     }
 
+    ProtectionGateway protectionGateway() {
+        return protection;
+    }
+
     @Override
     public void onEnable() {
         // 主树文件生命周期由 PepperLib ConfigFileStore 承担（构造即 copy-once 材质化 + 注释文档
         // + 绑定 + post-load，装载告警已由 PluginConfig 打印），故不再 saveDefaultConfig()
         // 与启动期二次 reload；/pm reload 仍走 store.reload()。
         this.config = new PluginConfig(this);
+
+        // 领地保护组合根：EVENTS 策略 = 历史伪方块事件；PEPPERCLAIM 策略 = PepperClaim 联动 API。
+        // 两策略注入网关，后端档位与 respect-protection 由配置实时驱动（/pm reload 生效）。
+        this.protection = new ProtectionGateway(
+                config::respectProtection,
+                config::protectionBackend,
+                new BukkitEventProtection(),
+                new PepperClaimProtection(getLogger()));
+        logProtectionBackend();
 
         CartTypeRegistry registry = new CartTypeRegistry(getLogger());
 
@@ -74,7 +97,7 @@ public class PepperMinecartPlugin extends JavaPlugin {
         registry.register(new ContainerHandler(sessions));
         registry.register(new WorkstationHandler(sessions));
         registry.register(new AnvilHandler(sessions));
-        registry.register(new DispenserCartHandler(config, sessions));
+        registry.register(new DispenserCartHandler(config, sessions, protection));
 
         // 对外服务（供其他插件扩展矿车类型）：先于存量扫描注册服务。
         // 依赖本插件的扩展插件在本插件 onEnable 返回后才执行自己的 onEnable/registerCartType，
@@ -91,7 +114,7 @@ public class PepperMinecartPlugin extends JavaPlugin {
         getServer().getPluginManager().registerEvents(sessions, this);
         InteractionCooldown interactionCooldown = new InteractionCooldown(config);
         getServer().getPluginManager().registerEvents(
-                new InteractionListener(this, engine, registry, config, interactionCooldown), this);
+                new InteractionListener(this, engine, registry, config, interactionCooldown, protection), this);
         // 冷却记录需监听玩家退出做清理（防离线条目泄漏）
         getServer().getPluginManager().registerEvents(interactionCooldown, this);
 
@@ -110,6 +133,61 @@ public class PepperMinecartPlugin extends JavaPlugin {
         }
 
         getLogger().info("PepperMinecart v" + getPluginMeta().getVersion() + " 已启用");
+    }
+
+    /**
+     * 启动可观测日志：实机冒烟（无客户端）唯一的后端观察点。必须出现在 enable 阶段且不含异常。
+     *
+     * <ul>
+     *   <li>检测到 PepperClaim（{@code ClaimApi.get() != null}）→ 后端档位 + {@code PepperClaim 联动 READY}</li>
+     *   <li>未检测到 → 明确降级：{@code PEPPERCLAIM} 档写出「无保护插件可用」，其余档写出「降级为伪事件策略」</li>
+     *   <li>已安装但联动 API 尚未装载完（PepperClaim 的运行时上下文在虚拟线程里异步装载）→ 单独措辞，
+     *       并在就绪后补一条尾部观测（{@link #trackLateLinkage()}），避免冒烟把「装载中」误读为「未安装」</li>
+     * </ul>
+     */
+    private void logProtectionBackend() {
+        boolean claimReady = PepperClaimProtection.available();
+        boolean claimInstalled = getServer().getPluginManager().getPlugin("PepperClaim") != null;
+        getLogger().info(protectionBackendLogLine(config.protectionBackend(), claimReady, claimInstalled));
+        if (!claimReady && claimInstalled) {
+            trackLateLinkage();
+        }
+    }
+
+    /** 后端日志文案（纯函数，便于逐档测试措辞）。 */
+    static String protectionBackendLogLine(ProtectionBackend backend, boolean claimReady, boolean claimInstalled) {
+        String prefix = "[PepperMinecart] 领地保护后端: " + backend + "；";
+        if (claimReady) {
+            return backend == ProtectionBackend.EVENTS
+                    ? prefix + "检测到 PepperClaim，但该档不咨询（沿用伪事件策略）"
+                    : prefix + "PepperClaim 联动 READY";
+        }
+        if (claimInstalled) {
+            return prefix + "PepperClaim 已安装，联动 API 装载中（"
+                    + (backend == ProtectionBackend.PEPPERCLAIM ? "就绪前无保护插件可用，动作全部放行" : "就绪前按伪事件策略")
+                    + "）";
+        }
+        return backend == ProtectionBackend.PEPPERCLAIM
+                ? prefix + "未检测到 PepperClaim，无保护插件可用（动作全部放行）"
+                : prefix + "未检测到 PepperClaim，降级为伪事件策略";
+    }
+
+    /**
+     * 联动尾部观测：每 {@value #LINKAGE_RECHECK_PERIOD_TICKS} tick 查一次，最长
+     * {@value #LINKAGE_RECHECK_ATTEMPTS} 次（约 15 秒）；就绪即报一行并停止。
+     */
+    private void trackLateLinkage() {
+        BukkitTask[] task = new BukkitTask[1];
+        int[] attempts = {0};
+        task[0] = getServer().getScheduler().runTaskTimer(this, () -> {
+            if (PepperClaimProtection.available()) {
+                getLogger().info("[PepperMinecart] 领地保护后端: " + config.protectionBackend()
+                        + "；PepperClaim 联动就绪（enable 期尚未装载完成）");
+                task[0].cancel();
+            } else if (++attempts[0] >= LINKAGE_RECHECK_ATTEMPTS) {
+                task[0].cancel();
+            }
+        }, LINKAGE_RECHECK_PERIOD_TICKS, LINKAGE_RECHECK_PERIOD_TICKS);
     }
 
     @Override

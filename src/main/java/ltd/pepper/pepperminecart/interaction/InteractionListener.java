@@ -2,14 +2,13 @@ package ltd.pepper.pepperminecart.interaction;
 
 import ltd.pepper.pepperminecart.api.CartTypeHandler;
 import ltd.pepper.pepperminecart.api.TakeOffResult;
-import ltd.pepper.pepperminecart.api.event.CartBlockPlaceEvent;
-import ltd.pepper.pepperminecart.api.event.CartBlockTakeOffEvent;
 import ltd.pepper.pepperminecart.config.ContainerPickupPolicy;
 import ltd.pepper.pepperminecart.config.PluginConfig;
 import ltd.pepper.pepperminecart.cooldown.InteractionCooldown;
 import ltd.pepper.pepperminecart.display.CartBlockDisplay;
 import ltd.pepper.pepperminecart.engine.CartEngine;
 import ltd.pepper.pepperminecart.impl.CartContextImpl;
+import ltd.pepper.pepperminecart.protection.ProtectionGateway;
 import ltd.pepper.pepperminecart.registry.CartTypeRegistry;
 import ltd.pepper.pepperminecart.registry.handler.GenericBlockHandler;
 import ltd.pepper.pepperminecart.storage.CartData;
@@ -18,8 +17,6 @@ import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Sound;
 import org.bukkit.World;
-import org.bukkit.block.Block;
-import org.bukkit.block.BlockFace;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
@@ -27,8 +24,6 @@ import org.bukkit.entity.minecart.RideableMinecart;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.EventPriority;
 import org.bukkit.event.Listener;
-import org.bukkit.event.block.BlockBreakEvent;
-import org.bukkit.event.block.BlockPlaceEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.InventoryHolder;
@@ -51,14 +46,17 @@ public class InteractionListener implements Listener {
     private final CartTypeRegistry registry;
     private final PluginConfig config;
     private final InteractionCooldown cooldown;
+    private final ProtectionGateway protection;
 
     public InteractionListener(JavaPlugin plugin, CartEngine engine, CartTypeRegistry registry,
-                               PluginConfig config, InteractionCooldown cooldown) {
+                               PluginConfig config, InteractionCooldown cooldown,
+                               ProtectionGateway protection) {
         this.plugin = plugin;
         this.engine = engine;
         this.registry = registry;
         this.config = config;
         this.cooldown = cooldown;
+        this.protection = protection;
     }
 
     // HIGH 而非 HIGHEST：给同监听器注册顺序在后的保护插件（HIGHEST）留出先拦截的机会，
@@ -126,7 +124,7 @@ public class InteractionListener implements Listener {
                 e.setCancelled(true);
                 return;
             }
-            if (config.respectProtection() && !checkBreakProtection(player, cart)) {
+            if (protection.denyTakeOff(player, cart.getLocation())) {
                 e.setCancelled(true);
                 return;
             }
@@ -145,6 +143,15 @@ public class InteractionListener implements Listener {
             ctx = engine.contextOrNull(cart);
             if (ctx == null) {
                 // 仅显示方块/第三方数据的矿车不受管：直接放行原版行为，不消耗冷却
+                return;
+            }
+            // 界面闸：打开矿车上的虚拟方块界面（工作站/铁砧/容器/发射器…）没有对应的原版方块事件，
+            // 必须主动问保护——否则领地内可无阻碍打开他人矿车上的界面。
+            // 只对插件自管普通矿车生效：原版箱/漏斗/熔炉矿车由 PepperClaim 自身监听器把关，
+            // 再判一次会重复计数 + 重复提示。被拒时不消耗冷却、也不进 safeInteract（界面不得打开）。
+            if (managedPlainCart(cart)
+                    && protection.denyOpenGui(player, cart.getLocation(), originalMaterialOf(cart))) {
+                e.setCancelled(true);
                 return;
             }
             if (!cooldown.tryUse(player)) {
@@ -232,7 +239,7 @@ public class InteractionListener implements Listener {
         if (type != null && !safeCanPlace(type, player, cart)) {
             return false;
         }
-        if (config.respectProtection() && !checkPlaceProtection(player, cart)) {
+        if (protection.denyPlace(player, cart.getLocation())) {
             return false;
         }
         return true;
@@ -322,48 +329,8 @@ public class InteractionListener implements Listener {
         }
     }
 
-    // ---- 领地保护协作：模拟原版方块事件，被其他插件取消则禁止操作 ----
-
-    private boolean checkPlaceProtection(Player player, Minecart cart) {
-        Location location = cart.getLocation();
-        if (location == null || location.getWorld() == null) {
-            // 拿不到位置时拒绝操作：宁可拦下合法操作，也不静默绕过领地保护
-            return false;
-        }
-        Material material = player.getInventory().getItemInMainHand().getType();
-        // 矿车语义保护事件（新）：让保护插件按“往矿车上放方块”精确判定
-        CartBlockPlaceEvent cartEvent = new CartBlockPlaceEvent(player, cart, material);
-        player.getServer().getPluginManager().callEvent(cartEvent);
-        if (cartEvent.isCancelled()) {
-            return false;
-        }
-        // 兼容旧的方块事件模拟：以矿车所在方块（通常为铁轨）作为代理
-        Block block = location.getBlock();
-        Block against = block.getRelative(BlockFace.DOWN);
-        ItemStack item = new ItemStack(material);
-        BlockPlaceEvent event = new BlockPlaceEvent(block, block.getState(), against, item, player, true,
-                EquipmentSlot.HAND);
-        player.getServer().getPluginManager().callEvent(event);
-        return !event.isCancelled();
-    }
-
-    private boolean checkBreakProtection(Player player, Minecart cart) {
-        Location location = cart.getLocation();
-        if (location == null || location.getWorld() == null) {
-            // 拿不到位置时拒绝操作：宁可拦下合法操作，也不静默绕过领地保护
-            return false;
-        }
-        Material material = originalMaterialOf(cart);
-        // 矿车语义保护事件（新）：让保护插件按“从矿车上取下方块”精确判定
-        CartBlockTakeOffEvent cartEvent = new CartBlockTakeOffEvent(player, cart, material);
-        player.getServer().getPluginManager().callEvent(cartEvent);
-        if (cartEvent.isCancelled()) {
-            return false;
-        }
-        // 兼容旧的方块事件模拟：以矿车所在方块（通常为铁轨）作为代理
-        Block block = location.getBlock();
-        BlockBreakEvent event = new BlockBreakEvent(block, player);
-        player.getServer().getPluginManager().callEvent(event);
-        return !event.isCancelled();
+    /** 界面闸目标：插件自管的普通矿车（原版特殊矿车由 PepperClaim 自身监听器把关，不双判）。 */
+    private static boolean managedPlainCart(Minecart cart) {
+        return cart.getType() == EntityType.MINECART && CartData.isManaged(cart);
     }
 }
