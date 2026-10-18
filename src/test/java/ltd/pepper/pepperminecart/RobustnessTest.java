@@ -22,6 +22,7 @@ import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.HopperMinecart;
 import org.bukkit.entity.minecart.RideableMinecart;
+import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
 import org.junit.jupiter.api.Test;
@@ -149,11 +150,50 @@ class RobustnessTest extends CartTestSupport {
     }
 
     @Test
+    void alreadyCancelledMountEventIsLeftAlone() {
+        AtomicInteger asked = new AtomicInteger();
+        api.registerCartType(plugin, new CountingSeatsCart(asked));
+        Minecart cart = placeOnNewCart(newPlayer(), Material.BOOKSHELF);
+
+        EntityMountEvent event = new EntityMountEvent(newPlayer(), cart);
+        event.setCancelled(true);
+        server.getPluginManager().callEvent(event);
+
+        assertTrue(event.isCancelled(), "已经取消的挂载事件不该被本插件改回去");
+        assertEquals(0, asked.get(), "预取消的事件不该进入 allowsPassengers 判定（ignoreCancelled）");
+    }
+
+    @Test
     void registryRejectsBrokenTypeDeclarations() {
         assertThrows(IllegalArgumentException.class, () -> api.registerCartType(plugin, new NullBlocksCart()));
         assertThrows(IllegalArgumentException.class, () -> api.registerCartType(plugin, new NonBlockCart()));
         assertThrows(IllegalArgumentException.class, () -> api.registerCartType(plugin, new ReservedNamespaceCart()));
         assertThrows(NullPointerException.class, () -> api.unregisterCartType(null));
+    }
+
+    /** 拒绝载客并数「被询问了几次」，用来证明预取消的事件没有惊动处理器。 */
+    static final class CountingSeatsCart implements CartType {
+        private final AtomicInteger asked;
+
+        CountingSeatsCart(AtomicInteger asked) {
+            this.asked = asked;
+        }
+
+        @Override
+        public NamespacedKey id() {
+            return new NamespacedKey("broken", "counting-seats");
+        }
+
+        @Override
+        public Set<Material> blocks() {
+            return Set.of(Material.BOOKSHELF);
+        }
+
+        @Override
+        public boolean allowsPassengers() {
+            asked.incrementAndGet();
+            return false;
+        }
     }
 
     /** 声明了 null 方块集合的坏类型。 */
