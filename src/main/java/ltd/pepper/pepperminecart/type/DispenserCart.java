@@ -98,7 +98,14 @@ public final class DispenserCart extends ContainerCart {
         // 先扣库存再弹出：dropItem 会同步触发 ItemSpawnEvent，扣减与弹出之间若让外部监听器插进来，
         // 就可能出现“东西弹出去了却没扣掉”的复制。弹出失败（被取消）时再把刚扣掉的还回去
         inventory.setItem(slot, stack.getAmount() > 1 ? stack.asQuantity(stack.getAmount() - 1) : null);
-        var ejected = minecart.getWorld().dropItem(from, stack.asOne(), item -> item.setVelocity(velocity));
+        org.bukkit.entity.Item ejected;
+        try {
+            ejected = minecart.getWorld().dropItem(from, stack.asOne(), item -> item.setVelocity(velocity));
+        } catch (RuntimeException e) {
+            inventory.setItem(slot, stack); // 弹出本身出错：把刚扣掉的那一件还回去，别弄丢
+            org.bukkit.Bukkit.getLogger().warning("发射器矿车 " + minecart.getUniqueId() + " 弹射物品时出错，已保留库存");
+            return false;
+        }
         if (ejected == null || !ejected.isValid()) {
             inventory.setItem(slot, stack); // 弹出被取消：还回刚扣掉的那一件
             return false;
