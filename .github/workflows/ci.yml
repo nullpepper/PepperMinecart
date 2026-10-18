@@ -52,6 +52,14 @@ jobs:
           ref: 26f823016a4418b0553a41440a0f61c195b7783d
           path: .ci/PepperLib
 
+      - name: Check the JDK 25 toolchain path
+        shell: bash
+        # 下面那条 -P 是承重的：runner 上既没有 foojay 自动下载，Gradle 也不扫 PATH 与 JAVA_HOME_25_X64，
+        # 一旦这个 output 拿不到就会在发布 PepperLib 时硬失败。这里提前把原因说清楚。
+        run: |
+          test -n "${{ steps.jdk25.outputs.path }}" || { echo "::error::setup-java 没有给出 JDK 25 的路径"; exit 1; }
+          test -x "${{ steps.jdk25.outputs.path }}/bin/java" || { echo "::error::JDK 25 路径下没有 java"; exit 1; }
+
       - name: Publish PepperLib to mavenLocal
         working-directory: .ci/PepperLib
         run: >-

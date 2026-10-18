@@ -193,12 +193,37 @@ public final class VanillaMinecartCart implements CartType {
         ItemStack[] merged = new ItemStack[size];
         for (int slot = 0; slot < size; slot++) {
             ItemStack fromCart = slot < live.length ? live[slot] : null;
-            if (fromCart != null && !fromCart.isEmpty()) {
+            ItemStack fromBlock = slot < kept.length ? kept[slot] : null;
+            boolean cartHas = fromCart != null && !fromCart.isEmpty();
+            boolean blockHas = fromBlock != null && !fromBlock.isEmpty();
+            if (cartHas) {
                 merged[slot] = fromCart;
-            } else if (slot < kept.length) {
-                merged[slot] = kept[slot];
+                if (blockHas && !fromBlock.isSimilar(fromCart)) {
+                    // 同一个槽位两边都有东西：矿车里的算更新，方块物品里那份另找空位，不能静默吞掉。
+                    // 内置的原版矿车走不到这里（方块物品与实体库存同尺寸、同槽位），是给自定义类型留的余地。
+                    spill(merged, fromBlock);
+                }
+            } else if (blockHas) {
+                merged[slot] = fromBlock;
             }
         }
         return merged;
+    }
+
+    /** 把合并时多出来的一份放进空槽，或并进同类的堆；真的没有空间时记一条日志。 */
+    private static void spill(ItemStack[] merged, ItemStack extra) {
+        for (int slot = 0; slot < merged.length; slot++) {
+            ItemStack current = merged[slot];
+            if (current == null || current.isEmpty()) {
+                merged[slot] = extra;
+                return;
+            }
+            if (current.isSimilar(extra)) {
+                merged[slot] = current.asQuantity(current.getAmount() + extra.getAmount());
+                return;
+            }
+        }
+        org.bukkit.Bukkit.getLogger().warning(
+                "原版矿车取下时合并内容失败：" + extra.getType() + " ×" + extra.getAmount() + " 没有空槽可放");
     }
 }

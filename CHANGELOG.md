@@ -76,7 +76,8 @@
 - 受管矿车登记时（`EntityAddToWorldEvent`）按方块物品补回显示方块：被第三方插件清掉显示后不再变成看不见方块的「隐形车」。
 - 原版矿车放置/摧毁时没能掉出去的内容物会留在方块物品里（放置时）或被记进日志（摧毁时）：
   此前 `dropItem` 的返回值被丢弃，掉落被取消就等于物品凭空消失。
-- 取消过挂载事件（`EntityMountEvent`）后，插件自己也不再对这次挂载做处理（`CartListener#onMount` 补回 `ignoreCancelled`）。
+- 取消过挂载事件（`EntityMountEvent`）后，插件自己也不再对这次挂载做处理。`CartListener#onMount` 的
+  `ignoreCancelled` 在重构时就已经在了，本轮补的是把它锁住的用例（`RobustnessTest#alreadyCancelledMountEventIsLeftAlone`）。
   注意 `EntityRemoveEvent` 与 `VehicleMoveEvent` 都不是 `Cancellable`，给它们设优先级或 `ignoreCancelled` 不会有任何
   过滤效果——真正保护 tick 循环的是上面那条 try/catch。
 - 注册矿车类型时显式校验 id 与材质（`Set.copyOf` 之前判空、拒绝 `minecraft`/`bukkit` 命名空间），
