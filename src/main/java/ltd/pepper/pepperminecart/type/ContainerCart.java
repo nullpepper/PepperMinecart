@@ -25,7 +25,7 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 容器方块（木桶、投掷器、潜影盒、烟熏炉……）：右键打开它的原版界面，内容保存在矿车上的方块物品里。
+ * 容器方块（木桶、投掷器、潜影盒、酿造台……）：右键打开它的原版界面，内容保存在矿车上的方块物品里。
  *
  * <p>方块物品本身就能装东西（原版的 {@code minecraft:container} 组件，潜影盒就是这样随身携带内容的），
  * 所以取下或破坏矿车时交还的是带着内容的方块物品，放回世界就是原来那个容器。
@@ -57,8 +57,8 @@ public class ContainerCart implements CartType {
     /** 箱子与漏斗不在其中：它们会变成原版的箱子矿车、漏斗矿车（见 {@link VanillaMinecartCart}）。 */
     private static Set<Material> defaultBlocks() {
         Set<Material> blocks = new HashSet<>(Tag.SHULKER_BOXES.getValues());
-        blocks.addAll(Set.of(Material.BARREL, Material.TRAPPED_CHEST, Material.DROPPER, Material.SMOKER,
-                Material.BLAST_FURNACE, Material.BREWING_STAND, Material.CRAFTER));
+        blocks.addAll(Set.of(Material.BARREL, Material.TRAPPED_CHEST, Material.DROPPER,
+                Material.BREWING_STAND, Material.CRAFTER));
         return blocks;
     }
 
@@ -115,7 +115,22 @@ public class ContainerCart implements CartType {
     public @Nullable ItemStack takeOff(ManagedCart cart) {
         ItemStack block = cart.blockItem();
         if (block != null && followsPickupPolicy(cart) && config.containerPickupPolicy() == ContainerPickupPolicy.DROP) {
-            BlockItems.nonEmptyContents(block).forEach(cart::dropItem);
+            ItemStack[] contents = BlockItems.contents(block);
+            for (int slot = 0; slot < contents.length; slot++) {
+                ItemStack content = contents[slot];
+                if (content == null || content.isEmpty()) {
+                    continue;
+                }
+                if (!cart.dropItem(content)) {
+                    // 有物品掉不出来（掉落被其他插件取消）：把它和后面还没掉出去的留在方块物品里交给玩家；
+                    // 前面已经掉出去的必须从内容里扣掉，否则会复制
+                    ItemStack[] remaining = contents.clone();
+                    for (int done = 0; done < slot; done++) {
+                        remaining[done] = null;
+                    }
+                    return BlockItems.withContents(block, remaining);
+                }
+            }
             block = BlockItems.withContents(block, new ItemStack[0]);
         }
         return block;

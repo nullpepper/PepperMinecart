@@ -117,7 +117,7 @@ public final class CartManager implements PepperMinecartAPI {
      * @return 这次交互是否由本插件处理（处理了就取消原版交互）
      */
     boolean place(Player player, Minecart minecart) {
-        ItemStack hand = player.getInventory().getItemInMainHand();
+        ItemStack hand = player.getInventory().getItemInMainHand().clone();
         Material material = hand.getType();
         if (!canCarryBlock(minecart) || material.isAir() || !material.isBlock() || !config.isBlockAllowed(material)) {
             return false;
@@ -132,11 +132,36 @@ public final class CartManager implements PepperMinecartAPI {
         }
 
         consumeOne(player, hand);
-        CartData.write(minecart, type.id(), block);
-        ManagedCartImpl cart = new ManagedCartImpl(this, minecart, type);
-        cart.showBlock(block);
-        track(minecart);
-        type.onPlaced(cart, player);
+        ManagedCartImpl cart = null;
+        try {
+            CartData.write(minecart, type.id(), block);
+            cart = new ManagedCartImpl(this, minecart, type);
+            cart.showBlock(block);
+            track(minecart);
+            type.onPlaced(cart, player);
+        } catch (RuntimeException e) {
+            // 放上方块是一次事务：任何一步出错都要把物品还给玩家、把矿车恢复原样
+            if (cart != null) {
+                if (cart.minecart() != minecart) {
+                    // 类型已经把原矿车替换成了新实体（例如箱子矿车）：新实体与它的库存都是这一步的产物，
+                    // 必须一起清掉。只清 PDC 会留下「物品已还给玩家 + 世界里多出一辆装着同样内容的矿车」
+                    if (cart.minecart() instanceof InventoryHolder holder) {
+                        holder.getInventory().clear();
+                    }
+                    cart.removeBlock();
+                    cart.minecart().remove();
+                } else {
+                    cart.removeBlock();
+                }
+            } else {
+                CartData.clear(minecart, type.id().getNamespace());
+                minecart.setDisplayBlockData(null);
+                untrack(minecart);
+            }
+            refundHand(player, hand);
+            plugin.getLogger().log(Level.WARNING, "放置方块到矿车 " + minecart.getUniqueId() + " 时出错，已回滚", e);
+            return false;
+        }
 
         if (config.soundPlace()) {
             playBlockSound(cart.minecart().getLocation(), block, true);
@@ -163,6 +188,23 @@ public final class CartManager implements PepperMinecartAPI {
             return;
         }
         player.getInventory().setItemInMainHand(hand.getAmount() > 1 ? hand.asQuantity(hand.getAmount() - 1) : null);
+    }
+
+    /**
+     * 放置事务失败时把方块还给玩家：创造模式不还（本来就没扣），主手空着就放回主手，
+     * 否则进背包、背包也满就掉在脚下——不要覆盖玩家此刻手上的东西。
+     */
+    private static void refundHand(Player player, ItemStack hand) {
+        if (player.getGameMode() == GameMode.CREATIVE) {
+            return;
+        }
+        if (player.getInventory().getItemInMainHand().isEmpty()) {
+            player.getInventory().setItemInMainHand(hand);
+            return;
+        }
+        for (ItemStack leftover : player.getInventory().addItem(hand).values()) {
+            player.getWorld().dropItem(player.getLocation(), leftover);
+        }
     }
 
     // ---- 使用 ----
@@ -212,25 +254,51 @@ public final class CartManager implements PepperMinecartAPI {
             plugin.getLogger().warning("矿车 " + minecart.getUniqueId() + " 没有可取下的方块物品（数据损坏？），已保持原样");
             return true;
         }
-        cart.removeBlock();
 
         Location location = cart.minecart().getLocation();
-        if (mode == TakeOffMode.INVENTORY) {
-            giveOrDrop(player, block);
-        } else {
-            location.getWorld().dropItemNaturally(location, block);
+        ItemStack undelivered = deliver(player, block, mode, location);
+        if (undelivered != null) {
+            // 交付被其他插件取消（例如领地插件取消 ItemSpawnEvent）：只把没交付出去的部分放回矿车。
+            // 不能拿 takeOff 之前的快照回滚——类型可能已经把内容物掉在地上（容器 DROP 策略），
+            // 也可能已经清空实体库存（原版矿车取下），用快照回滚会复制或丢失。
+            cart.setBlockItem(undelivered);
+            plugin.getLogger().warning("矿车 " + minecart.getUniqueId() + " 的取下交付被取消，未交付的部分已放回矿车");
+            return true;
         }
+        cart.removeBlock();
         if (config.soundTakeOff()) {
             playBlockSound(location, block, false);
         }
         return true;
     }
 
-    /** 与原版 /give 一致：放进背包，放不下的掉在玩家脚下。 */
-    private static void giveOrDrop(Player player, ItemStack item) {
-        for (ItemStack leftover : player.getInventory().addItem(item).values()) {
-            player.getWorld().dropItem(player.getLocation(), leftover);
+    /**
+     * 把取下的方块交给玩家。
+     *
+     * @return 没能交付出去的部分；全部交付成功时返回 {@code null}。
+     *         调用方必须把返回值放回矿车，它是玩家唯一的一份。
+     */
+    private static @Nullable ItemStack deliver(Player player, ItemStack item, TakeOffMode mode, Location cartLocation) {
+        // 注意：Paper 的掉落方法即使生成被 ItemSpawnEvent 取消也返回实体、从不返回 null，
+        // 只能靠实体是否还有效（被取消时已被 discard）判断
+        if (mode != TakeOffMode.INVENTORY) {
+            var dropped = cartLocation.getWorld().dropItemNaturally(cartLocation, item);
+            return dropped != null && dropped.isValid() ? null : item;
         }
+        // 与原版 /give 一致：先放进背包，放不下的掉在玩家脚下
+        ItemStack undelivered = null;
+        for (ItemStack leftover : player.getInventory().addItem(item).values()) {
+            var dropped = player.getWorld().dropItem(player.getLocation(), leftover);
+            if (dropped != null && dropped.isValid()) {
+                continue;
+            }
+            if (undelivered == null) {
+                undelivered = leftover.clone();
+            } else {
+                undelivered.setAmount(undelivered.getAmount() + leftover.getAmount());
+            }
+        }
+        return undelivered;
     }
 
     /** 播放该方块被放置/破坏时的原版音效（音量、音调的换算与原版相同）。 */
@@ -300,7 +368,15 @@ public final class CartManager implements PepperMinecartAPI {
     private void tick() {
         menus.tick();
         for (Minecart minecart : List.copyOf(loadedCarts.values())) {
-            ManagedCartImpl cart = minecart.isValid() ? find(minecart) : null;
+            ManagedCartImpl cart;
+            try {
+                cart = minecart.isValid() ? find(minecart) : null;
+            } catch (RuntimeException e) {
+                // 数据损坏的矿车必须只报废自己：异常逃出循环会取消整条 repeating task，全服矿车一起停摆
+                untrack(minecart);
+                plugin.getLogger().log(Level.WARNING, "矿车 " + minecart.getUniqueId() + " 的数据无法读取，已停止管理", e);
+                continue;
+            }
             if (cart == null) {
                 untrack(minecart);
                 continue;

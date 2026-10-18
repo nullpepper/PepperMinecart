@@ -21,7 +21,7 @@ Minecraft **Paper 1.21.4+** 服务端插件：把方块放到矿车上，实现*
 
 ## 安装
 
-1. 将 `PepperMinecart-1.0.0-all.jar` 放入服务器 `plugins/` 目录（不带 `-all` 的是瘦包，无内置 bstats，部署会 `NoClassDefFoundError`）
+1. 将 `PepperMinecart-2.0.0-all.jar` 放入服务器 `plugins/` 目录（不带 `-all` 的是瘦包，无内置 bstats，部署会 `NoClassDefFoundError`）
 2. 重启服务器（或 `/reload`）
 3. 首次启动自动生成带注释的 `plugins/PepperMinecart/config.yml`
 
@@ -162,7 +162,7 @@ A：方块只在矿车被真正摧毁时掉落一次；区块卸载、乘客下�
 ## 构建
 
 ```bash
-./gradlew build        # 产物: build/libs/PepperMinecart-1.0.0-all.jar
+./gradlew build        # 产物: build/libs/PepperMinecart-2.0.0-all.jar
 ./gradlew test         # 单元测试 + MockBukkit 集成测试
 ```
 

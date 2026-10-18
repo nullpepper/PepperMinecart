@@ -81,8 +81,11 @@ final class ManagedCartImpl implements ManagedCart {
     }
 
     @Override
-    public void dropItem(ItemStack item) {
-        minecart.getWorld().dropItemNaturally(minecart.getLocation(), item);
+    public boolean dropItem(ItemStack item) {
+        // Paper 的 dropItemNaturally 即使生成被 ItemSpawnEvent 取消也照样返回实体、从不返回 null，
+        // 所以只能靠实体本身是否还有效来判断（被取消时实体已被 discard）
+        var dropped = minecart.getWorld().dropItemNaturally(minecart.getLocation(), item);
+        return dropped != null && dropped.isValid();
     }
 
     @Override

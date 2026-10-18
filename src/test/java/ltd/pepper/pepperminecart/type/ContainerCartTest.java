@@ -92,6 +92,24 @@ class ContainerCartTest extends TypeTestSupport {
     }
 
     @Test
+    void cancelledDropKeepsTheUndeliveredContentsInTheBlockItem() {
+        ContainerCart type = withPolicy("DROP");
+        InMemoryCart cart = barrelCart(type,
+                new ItemStack(Material.DIAMOND, 1),
+                new ItemStack(Material.EMERALD, 1),
+                new ItemStack(Material.GOLD_INGOT, 1));
+        cart.failDropsAfter(1); // 第一格掉得出去，之后全被取消
+
+        ItemStack returned = type.takeOff(cart);
+
+        assertNotNull(returned);
+        assertEquals(1, cart.drops.size(), "只有第一格掉了出去");
+        assertEquals(0, count(BlockItems.contents(returned), Material.DIAMOND), "已经掉出去的那份必须从方块里扣掉，否则会复制");
+        assertEquals(1, count(BlockItems.contents(returned), Material.EMERALD), "没掉出去的要留在方块里，不能丢");
+        assertEquals(1, count(BlockItems.contents(returned), Material.GOLD_INGOT));
+    }
+
+    @Test
     void forbiddenPolicyRefusesWithAMessage() {
         ContainerCart type = withPolicy("FORBIDDEN");
         PlayerMock player = server.addPlayer();

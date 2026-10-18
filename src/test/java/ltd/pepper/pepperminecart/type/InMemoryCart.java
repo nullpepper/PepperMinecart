@@ -29,6 +29,8 @@ final class InMemoryCart implements ManagedCart {
     private final Map<NamespacedKey, Long> cooldowns = new HashMap<>();
     final List<ItemStack> drops = new ArrayList<>();
     final List<Runnable> closeCallbacks = new ArrayList<>();
+    /** 还能成功掉落几次；0 表示之后的掉落全被取消（模拟领地/防掉落插件）。 */
+    private int dropBudget = Integer.MAX_VALUE;
 
     InMemoryCart(Minecart minecart, CartType type, @Nullable ItemStack block) {
         this.minecart = minecart;
@@ -74,8 +76,18 @@ final class InMemoryCart implements ManagedCart {
     }
 
     @Override
-    public void dropItem(ItemStack item) {
+    public boolean dropItem(ItemStack item) {
+        if (dropBudget <= 0) {
+            return false;
+        }
+        dropBudget--;
         drops.add(item.clone());
+        return true;
+    }
+
+    /** 让前 {@code successfulDrops} 次掉落成功、之后的全部被取消。 */
+    void failDropsAfter(int successfulDrops) {
+        this.dropBudget = successfulDrops;
     }
 
     @Override

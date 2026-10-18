@@ -1,7 +1,7 @@
 name: PepperMinecart
 version: '${version}'
 main: ltd.pepper.pepperminecart.PepperMinecartPlugin
-api-version: '1.21'
+api-version: '1.21.4'
 folia-supported: false
 description: 移动工作站与移动仓库 —— 把方块放到矿车上
 authors: [PepperMinecart]

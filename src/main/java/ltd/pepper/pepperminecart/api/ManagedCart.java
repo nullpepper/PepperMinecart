@@ -40,8 +40,13 @@ public interface ManagedCart {
     /** 移除矿车上的方块但不交给任何人，矿车变回普通矿车（例如铁砧用坏了）。 */
     void removeBlock();
 
-    /** 在矿车所在位置掉落物品。 */
-    void dropItem(ItemStack item);
+    /**
+     * 在矿车所在位置掉落物品。
+     *
+     * @return 是否真的掉出来了；掉落被其他插件取消（例如领地插件取消 {@code ItemSpawnEvent}）时返回 false，
+     * 调用方应放弃这次操作并保留矿车上的数据，否则物品会凭空消失
+     */
+    boolean dropItem(ItemStack item);
 
     /**
      * 打开一个原版方块界面（工作台、铁砧、织布机……），效果如同该方块就摆在矿车所在的位置。

@@ -122,13 +122,20 @@ public final class AnvilCart implements CartType, Listener {
             cart.setBlockItem(anvil.withType(worn)); // “使用铁砧”的音效原版界面已经播放
             return;
         }
-        // 用坏了：方块消失；界面在下一 tick 因方块不在了而关闭，与原版一致
+        // 用坏了：先把损坏的铁砧交出去，成功之后才让方块消失；
+        // 界面在下一 tick 因方块不在了而关闭，与原版一致
         Location location = cart.minecart().getLocation();
+        if (config.anvilDropOnBreak()) {
+            // Paper 的 dropItemNaturally 即使生成被取消也返回实体，只能靠实体是否还有效判断
+            var dropped = location.getWorld().dropItemNaturally(location, anvil);
+            if (dropped == null || !dropped.isValid()) {
+                // 掉落被其他插件取消：保留铁砧，否则物品会直接消失
+                Bukkit.getLogger().warning("铁砧矿车 " + cart.minecart().getUniqueId() + " 报废后的掉落被其他插件取消，已取消报废");
+                return;
+            }
+        }
         cart.removeBlock();
         location.getWorld().playSound(location, Sound.BLOCK_ANVIL_DESTROY, SoundCategory.BLOCKS, 1.0F, 1.0F);
-        if (config.anvilDropOnBreak()) {
-            location.getWorld().dropItemNaturally(location, anvil);
-        }
     }
 
     private static @Nullable Material worn(Material anvil) {

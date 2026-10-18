@@ -14,7 +14,10 @@ import org.bukkit.entity.Item;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.RideableMinecart;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityRemoveEvent;
+import org.bukkit.event.entity.ItemSpawnEvent;
 import org.bukkit.event.player.PlayerInteractEntityEvent;
 import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
@@ -113,6 +116,27 @@ abstract class CartTestSupport {
 
     protected void removeCart(Minecart minecart, EntityRemoveEvent.Cause cause) {
         server.getPluginManager().callEvent(new EntityRemoveEvent(minecart, cause));
+    }
+
+    /**
+     * 模拟领地/防掉落类插件：取消一切掉落物生成。
+     * MockBukkit 的 {@code WorldMock} 会照真实 Paper 的做法把被取消的掉落物实体丢弃，
+     * 因此 {@code World#dropItem} 的返回值仍非 null，只有 {@code Item#isValid()} 会变成 false。
+     */
+    protected void cancelItemSpawns() {
+        cancelItemSpawnsOf(null);
+    }
+
+    /** 只取消某种材质的掉落物生成（null 表示全部），用来构造「掉了一半才被拦下」的场景。 */
+    protected void cancelItemSpawnsOf(Material material) {
+        server.getPluginManager().registerEvents(new Listener() {
+            @EventHandler
+            public void onItemSpawn(ItemSpawnEvent event) {
+                if (material == null || event.getEntity().getItemStack().getType() == material) {
+                    event.setCancelled(true);
+                }
+            }
+        }, MockBukkit.createMockPlugin("no-drops"));
     }
 
     protected List<ItemStack> droppedItems(Material material) {
