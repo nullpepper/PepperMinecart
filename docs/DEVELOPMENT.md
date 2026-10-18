@@ -1,105 +1,110 @@
 # PepperMinecart 开发文档
 
-> 面向插件维护者/贡献者的开发说明。用户文档见根目录 `README.md`。
+> 面向维护者与贡献者。用户文档见根目录 `README.md`。
 
-## 1. 项目概览
+## 1. 设计原则
 
-PepperMinecart 是一个 Paper 1.21+ 插件，允许玩家把方块放到矿车上，形成“移动工作站 / 移动仓库”。
-
-核心能力：
-
-- 放置方块到普通矿车，使用原版 `Minecart#setDisplayBlockData` 渲染；
-- 潜行取下，按 `take-off-mode` / `container-pickup-policy` 分发物品；
-- 工作站、铁砧、容器、特殊矿车、发射器矿车等内置类型；
-- 通过 `PepperMinecartAPI` 支持第三方注册新矿车类型。
+1. **能交给原版的都交给原版。** 界面用原版界面（`MenuType`、方块自己的库存类型），物品归还用原版界面的关闭逻辑，
+   箱子/漏斗/熔炉/TNT/命令方块直接变成原版矿车实体，显示方块用原版实体数据，铁砧受损照搬原版规则。
+   插件只补原版没有的那一层：把“方块”和“矿车”关联起来。
+2. **新增矿车类型不改核心。** 引擎只认识 `CartType` 接口；内置类型与第三方类型走同一个注册表、同一套钩子。
+3. **数据只有一份，就在实体上。** 类型 id 与方块物品存矿车 PDC，显示存原版 NBT；`ManagedCart` 只是实体之上的视图，
+   随用随建，不缓存状态，因此不存在“引擎记录与实体不一致”的问题。
 
 ## 2. 技术栈与构建
 
-- Java 21，Gradle Kotlin DSL；
-- 依赖 `io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT`；
-- 测试使用 JUnit 5 + MockBukkit；
-- 构建产物由 Shadow 打包，relocate `org.bstats`。
+- Java 21，Gradle Kotlin DSL，`io.papermc.paper:paper-api:1.21.4-R0.1-SNAPSHOT`；
+- 测试：JUnit 5 + MockBukkit；
+- 产物由 Shadow 打包，relocate `org.bstats`；
+- 前置库 PepperLib（`ltd.pepper:pepper-lib`，版本见 `gradle.properties`）从 `mavenLocal()` 解析。
 
 ```bash
-# 注意：必须 JDK 21+。~/jdk-17 无法构建（build.gradle.kts 要求 release 21，
-# 且 paper-api 1.21.4 本身要求 JVM 21）；home 下的 GraalVM JDK 21 可用：
-JAVA_HOME=/home/pepper/graalvm/jdk-21 PATH=$JAVA_HOME/bin:$PATH ./gradlew clean build
+JAVA_HOME=/path/to/jdk-21 ./gradlew clean build
 ```
 
 ## 3. 源码结构
 
-| 路径 | 职责 |
+| 包 | 职责 |
 |---|---|
-| `com.pepperminecart.api` | 对外扩展接口：`CartTypeHandler`、`CartContext`、`PepperMinecartAPI` |
-| `com.pepperminecart.engine` | 引擎：受管矿车集合、tick、事件路由、取下/销毁编排、实体替换原语 |
-| `com.pepperminecart.interaction` | 玩家右键矿车交互状态机 |
-| `com.pepperminecart.container` | 打开中的界面会话管理：容器实时回写、虚拟界面残留回收、铁砧耐久判定 |
-| `com.pepperminecart.registry` | 类型注册表与内置处理器 |
-| `com.pepperminecart.storage` | PDC 整物品持久化 |
-| `com.pepperminecart.display` | 显示方块封装 |
-| `com.pepperminecart.anvil` | 铁砧损坏状态机 |
-| `com.pepperminecart.config` | 配置模型与冷却 |
-| `com.pepperminecart.command` | `/pm reload` |
+| `api` | 对外扩展接口：`CartType`（类型钩子）、`ManagedCart`（矿车视图）、`PepperMinecartAPI`（服务）、保护事件 |
+| `cart` | 引擎：`CartManager`（生命周期编排，兼 API 实现）、`CartListener`（事件 → 操作）、`CartRegistry`、`CartData`（PDC 读写）、`CartMenus`（矿车界面的打开与关闭）、`ManagedCartImpl` |
+| `type` | 内置矿车类型：`PlainBlockCart`、`WorkstationCart`、`AnvilCart`、`ContainerCart`、`DispenserCart`、`VanillaMinecartCart`，以及方块物品数据工具 `BlockItems` |
+| `config` | 配置模型（PepperLib `@ConfigModel`）与门面 `PluginConfig` |
+| `protection` | 领地保护：`ProtectionGateway` 组合 PepperClaim 联动与伪方块事件两种后端 |
+| `cooldown` | 玩家交互冷却 |
+| `command` | `/pm reload` |
 
-## 4. 核心数据流
+## 4. 核心流程
 
-### 4.1 放置
+### 4.1 放上方块（`CartManager#place`）
 
-1. `InteractionListener` 判定空普通矿车 + 潜行 + 手持允许方块；
-2. `CartEngine.addCart` 写入 PDC：`cart-type`、`item`、`original-material`；
-3. 调用 `CartTypeHandler.onPlaced`；
-4. 普通矿车设置显示方块与偏移；特殊矿车转换为原版特殊矿车实体；
-5. 成功后消耗主手 1 个物品；失败回滚并保持物品不消耗。
+1. 只接受空着的普通矿车：没有乘客、没有插件数据、也没有别人设置的显示方块；
+2. 主手是方块且配置允许 → 按方块找类型（没有专门类型的用 `PlainBlockCart`）→ `canPlace` → 领地保护 → 冷却；
+3. 扣 1 个物品（创造模式不扣，同原版）→ 写入类型 id 与方块物品 → 显示方块 → `onPlaced`。
 
-### 4.2 取下
+`onPlaced` 抛异常时方块已经在矿车上、物品已扣，状态一致，玩家可以正常取下。
 
-1. `InteractionListener` 做策略/权限/乘客/保护检查；
-2. `CartEngine.takeOff` 统一编排；
-3. 先 `flushCartSessions` 回写并关闭该矿车界面；
-4. 调用 `onTakeOff`；非 `HANDLED` 时取得返还物品；
-5. 特殊矿车还原为普通矿车；普通矿车清除显示与 PDC；
-6. 按策略把物品交给玩家或落地。
+### 4.2 使用（`CartManager#use`）
 
-### 4.3 销毁
+普通矿车上的方块界面没有原版方块事件，先问领地保护再调用 `onUse`；原版特殊矿车（箱子矿车等）的右键是原版交互，
+直接交给类型（默认什么也不做，原版打开界面）。
 
-`EntityRemoveEvent` 统一处理矿车移除：
+### 4.3 取下（`CartManager#takeOff`）
 
-- `UNLOAD` 只回写/关闭会话，不视为销毁；
-- 原版特殊矿车走原版死亡掉落时跳过插件补掉落，避免重复；
-- 其他移除路径调用 `onCartDestroyed` 并执行默认掉落。
+1. `take-off-mode: DISABLED` 或类型 `canTakeOff` 返回 false → 不处理，点击交给原版；
+2. 有乘客、领地拒绝、冷却中 → 吞掉点击；
+3. **先关闭矿车的所有界面**（容器界面在关闭时写回方块物品）→ `takeOff` 得到要交付的物品 →
+   `removeBlock` 清除数据并恢复原版外观 → 按模式交付，播放该方块的原版破坏音效。
 
-## 5. 关键设计决策与预期行为
+### 4.4 移除（`CartManager#onRemoved`，监听 `EntityRemoveEvent`）
 
-以下行为是**有意设计**，修改前需确认是否影响既有需求：
+- `UNLOAD`（区块卸载）与 `PLAYER_QUIT`（乘客下线，矿车随玩家保存）是暂时离开：只关闭界面，不掉落；
+- 其余视为摧毁：关闭界面后调用 `onDestroyed`，默认掉落方块物品；
+- 原版特殊矿车：`DEATH` 且 doEntityDrops 开启时原版会掉落“箱子矿车”这类物品，插件不补掉；
+  `EXPLODE`（TNT 矿车自爆）不返还 TNT。
 
-- 挂有方块的矿车默认禁止乘坐，由 `CartTypeHandler.allowRiding()` 控制。
-- 潜影盒不受 `container-pickup-policy` 管控，始终按 `take-off-mode` 处理。
-- 铁砧耐久链：`ANVIL → CHIPPED_ANVIL → DAMAGED_ANVIL → 报废`。
-- **命令矿车放置/取下/销毁时保留命令**：`buildTakeOffItem` 会把实体当前命令写回方块物品（清空命令也会写回空串）；但命令方块的自定义名（`CommandBlock#getName`）与连锁/循环类型不迁移，连锁/循环一律按普通命令矿车处理。
-- 容器内容以“整物品”形式存 PDC，取下时随物品 NBT 回收；特殊矿车内容在取下的瞬间组装进带库存的容器物品。
-- 投掷器矿车使用世界年龄语义冷却，跨区块卸载/重载持久。
+### 4.5 矿车界面（`CartMenus`）
 
-## 6. 错误处理约定
+方块界面在矿车处没有真实方块，打开时关闭原版的可用性检查（`checkReachable(false)`），改由 `CartMenus` 每 tick 按矿车检查：
+矿车无效、类型 id 变了（方块被取下、铁砧损毁）或玩家离开 8 格就关闭——与原版矿车容器的 `stillValid` 一致。
+界面里的物品如何退还由原版界面自己负责。
 
-- **不针对“数据受损”场景做自愈/恢复设计**。
-- 若运行中检测到异常数据（例如 PDC 物品缺失、材质无法解析、显示与存储不一致但无法安全修复），只应在后台打印日志提醒，不额外尝试猜测性恢复。
-- 引擎自身的状态管理（`contexts`、会话表）**必须保持一致性**：任何提前 return / 异常路径都不能泄漏受管 context 或打开中的会话。
-- 单个矿车的 `onTick` / `onMove` / `onCartDestroyed` 异常不应拖垮全局 tick 任务或事件链路，应记录日志并跳过该矿车。
+### 4.6 实体转换（`ManagedCart#convertTo`）
+
+用 `World#spawn` 的预处理回调生成新实体（位置、速度、名字、记分板标签、全部 PDC 在加入世界前就设好），
+再清掉旧实体的插件数据与库存后移除——旧实体的移除不会被当成摧毁，原版也不会把库存撒出来。
+
+## 5. 内置类型速览
+
+| 类型（id） | 方块 | 实现要点 |
+|---|---|---|
+| `PlainBlockCart`（`generic`） | 没有专门类型的方块 | 全部默认行为；也是类型丢失时的兜底 |
+| `WorkstationCart`（`workstation`） | 工作台等 7 种 | 方块 → `MenuType` 对照表，新增工作站只加一行 |
+| `AnvilCart`（`anvil`） | 三种铁砧 | 原版铁砧界面；“点击结果槽 + 同一次点击里第一个输入槽被清空”即判定取走结果，按原版规则受损 |
+| `ContainerCart`（`container`） | 木桶、潜影盒等 | 按方块自己的库存类型建界面，内容读写方块物品的容器数据；同一辆矿车所有查看者共用一份库存 |
+| `DispenserCart`（`dispenser`） | 发射器 | 继承 `ContainerCart`，`onMove` 检测充能激活铁轨 |
+| `VanillaMinecartCart`（`special`） | 箱子、漏斗、熔炉、TNT、命令方块 | 放上即 `convertTo` 原版矿车；`nativeBlock` 让原版矿车也能取下 |
+
+## 6. 约定
+
+- **不做数据自愈。** 读不出的方块物品只记日志、跳过本次操作，不猜测、不删除数据。
+- **扩展钩子的异常交给 Bukkit。** 事件里的异常由 Bukkit 记录且不影响其他插件；唯一的例外是 tick 循环，
+  一辆矿车的 `onTick` 出错只记录日志，不拖累其他矿车。
+- **命名空间。** `pepperminecart` 保留给内置类型；矿车取下时清除 `pepperminecart` 与类型命名空间下的 PDC 键，
+  其他插件的数据不动。
+- **保护判定只在上游动作做一次**（放上、取下、打开界面、环境弹出），详见 `ProtectionGateway` 的类注释。
 
 ## 7. 测试
 
 ```bash
-JAVA_HOME=/path/to/jdk-21 PATH=$JAVA_HOME/bin:$PATH ./gradlew test
+./gradlew test
 ```
 
-测试覆盖：
+- `PlacementTest`、`TakeOffTest`、`DestroyTest`、`RidingTest`、`CartMenuTest`、`VanillaMinecartTest`、
+  `CartTypeApiTest`、`ProtectionIntegrationTest`：加载真实插件的 MockBukkit 集成测试，按玩家可见的行为断言；
+- `type` 包下的测试：用内存中的 `InMemoryCart` 单独测试每个内置类型
+  （MockBukkit 序列化物品时会丢失容器内容，涉及内容的断言放在这一层）；
+- `config`、`protection`、`cooldown`：各自模块的单元测试。
 
-- 放置/取下三策略；
-- 销毁不复制；
-- 容器会话回写；
-- 铁砧耐久状态机；
-- 特殊矿车转换；
-- 冷却语义；
-- 配置解析。
-
-新增功能或修复 Bug 时，应同步补充或更新 MockBukkit 测试。
+MockBukkit 的已知限制：不能构建 `MenuType` 界面（工作站/铁砧界面的打开只验证对应关系），没有方块音效组
+（测试中关闭音效），激活铁轨的方块数据不是 `RedstoneRail`（测试中用代理）。新增功能或修复问题时请同步补充测试。

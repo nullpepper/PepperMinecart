@@ -14,7 +14,6 @@ import ltd.pepper.lib.config.ConfigPath;
 import ltd.pepper.lib.config.ConfigRange;
 import ltd.pepper.lib.config.IssueCollector;
 import ltd.pepper.lib.config.IssueLevel;
-import ltd.pepper.pepperminecart.api.TakeOffResult;
 import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import org.bukkit.Material;
 
@@ -40,12 +39,12 @@ public class MinecartConfigModel {
     @ConfigComment({
         "取下策略（对所有方块生效；容器类方块额外受下方 container-pickup-policy 约束，",
         "其 FORBIDDEN 优先级更高）：",
-        "  INVENTORY - 取下后进玩家背包（放不下掉落地面）",
+        "  INVENTORY - 取下后进玩家背包（放不下的掉在玩家脚下，同原版 /give）",
         "  DROP      - 取下后掉落到地面",
         "  DISABLED  - 禁止取下"
     })
     @ConfigPath("take-off-mode")
-    TakeOffResult takeOffMode = TakeOffResult.INVENTORY;
+    TakeOffMode takeOffMode = TakeOffMode.INVENTORY;
 
     @ConfigComment({
         "true  = 除 disabled-blocks 外所有方块都允许放置",

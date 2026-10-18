@@ -2,6 +2,48 @@
 
 本文件遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 格式，版本号遵循语义化版本。
 
+## [未发布] - 矿车类型架构重构
+
+以可扩展性与“尽量复用原版”为目标重写了引擎与全部内置类型。存档数据（PDC 键与类型 id）保持不变，
+已有矿车无需迁移；**扩展 API 不兼容旧版**，扩展插件需要按下表迁移（建议随此版本发布 2.0.0）。
+
+### 破坏性变更（扩展 API）
+
+| 旧 | 新 |
+|---|---|
+| `CartTypeHandler` | `CartType`（`getId` → `id`，`handledMaterials` → `blocks`，`onInteract` → `onUse`，`allowRiding` → `allowsPassengers`，`onCartDestroyed` → `onDestroyed(cart, cause)`） |
+| `CartContext` | `ManagedCart`（方块物品读写、`openMenu`/`openInventory`、`convertTo`、冷却）；元数据直接用实体 PDC |
+| `onTakeOff` + `TakeOffOutcome` + `getTakeOffItem` + `releaseCart` | `canTakeOff` + `takeOff`（返回交付物品）；插件负责清理 |
+| `VanillaCartSupport`、`isContainerPickupControlled` | `nativeBlock`；容器取下策略由 `ContainerCart` 自己处理 |
+| `onMount` / `onDismount` | 移除，需要时直接监听 Bukkit 的 `EntityMountEvent` 并用 `PepperMinecartAPI#getCart` 判断 |
+| `registerCartType(handler)` | `registerCartType(plugin, type)`：扩展插件禁用时自动注销其类型 |
+| `api.TakeOffResult` | `config.TakeOffMode` |
+
+### 变更（复用原版）
+- 工作站与铁砧改用 Paper 1.21.4 的 `MenuType` 打开原版界面（替代已弃用的 `openWorkbench` 等）；
+  界面关闭时由原版界面自己退还物品，删除了插件自写的“残留物回收”。
+- 矿车界面改按原版矿车容器的规则关闭：矿车消失、方块被取下或玩家离开 8 格即关闭，不再能隔着任意距离使用。
+- 容器矿车用方块自己的库存类型创建界面，槽位规则由原版负责；同一辆矿车多人共享同一份库存。
+- 铁砧受损改为在“取走结果”的同一次点击里判定（替代延迟一 tick 的确认流程）；与原版一样创造模式不受损，
+  使用音效交给原版界面播放。
+- 放置/取下播放该方块自己的原版音效；创造模式放置不消耗物品；取下时背包放不下的物品与原版 `/give` 一样掉在玩家脚下。
+- 实体转换在 `World#spawn` 的预处理回调里一次设好位置、速度、名字与数据。
+- 受管矿车改由 `EntityAddToWorldEvent` 登记（替代按区块扫描），类型在使用时按 id 解析，晚注册、重注册立即生效。
+
+- `vanilla-carts.allow-pickup: false` 或 `take-off-mode: DISABLED` 时，潜行右键原版特殊矿车交给原版（打开箱子矿车界面），
+  插件转换出的矿车与原版矿车行为一致。
+
+### 修复
+- 容器矿车直接打开物品里的方块实体快照（位于 `BlockPos.ZERO`）：按 Paper 1.21.4 源码，木桶的开合逻辑会对该坐标
+  `setBlock`，即在世界 (0, 0, 0) 放下一个木桶（源码分析结论，未在实机复现）。现改为按方块的库存类型新建界面。
+- 乘客下线（`PLAYER_QUIT`，矿车随玩家保存）被当成矿车被摧毁，方块掉落后随玩家回来的矿车仍载着方块（复制）。
+- 插件放上的 TNT 矿车爆炸（`EXPLODE`）后会再掉落一个 TNT（复制）。
+- 别的插件或地图用命令设置的显示方块可被潜行右键“取下”成物品（凭空获得方块）。
+
+### 移除
+- 为“掉落被其他插件取消”设计的多层回滚与补偿：真实 Paper 上 `World#dropItem(Naturally)` 即使生成被取消也返回实体、
+  从不返回 null，这套机制只在 MockBukkit 里生效，却让取下/放置流程难以阅读。原版对同类情况同样不做补偿。
+
 ## [未发布] - 领地保护接入与配置层迁移
 
 ### 新增

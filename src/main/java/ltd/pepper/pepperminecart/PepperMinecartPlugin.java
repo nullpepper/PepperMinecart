@@ -1,32 +1,33 @@
 package ltd.pepper.pepperminecart;
 
-import ltd.pepper.pepperminecart.anvil.AnvilDamageTracker;
 import ltd.pepper.pepperminecart.api.PepperMinecartAPI;
+import ltd.pepper.pepperminecart.cart.CartListener;
+import ltd.pepper.pepperminecart.cart.CartManager;
+import ltd.pepper.pepperminecart.cart.CartMenus;
+import ltd.pepper.pepperminecart.cart.CartRegistry;
 import ltd.pepper.pepperminecart.command.PepperMinecartCommand;
 import ltd.pepper.pepperminecart.config.PluginConfig;
-import ltd.pepper.pepperminecart.container.CartSessionManager;
 import ltd.pepper.pepperminecart.cooldown.InteractionCooldown;
-import ltd.pepper.pepperminecart.engine.CartEngine;
-import ltd.pepper.pepperminecart.impl.PepperMinecartAPIImpl;
-import ltd.pepper.pepperminecart.interaction.InteractionListener;
 import ltd.pepper.pepperminecart.protection.BukkitEventProtection;
 import ltd.pepper.pepperminecart.protection.PepperClaimProtection;
 import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import ltd.pepper.pepperminecart.protection.ProtectionGateway;
-import ltd.pepper.pepperminecart.registry.CartTypeRegistry;
-import ltd.pepper.pepperminecart.registry.handler.AnvilHandler;
-import ltd.pepper.pepperminecart.registry.handler.ContainerHandler;
-import ltd.pepper.pepperminecart.registry.handler.DispenserCartHandler;
-import ltd.pepper.pepperminecart.registry.handler.GenericBlockHandler;
-import ltd.pepper.pepperminecart.registry.handler.SpecialCartHandler;
-import ltd.pepper.pepperminecart.registry.handler.WorkstationHandler;
+import ltd.pepper.pepperminecart.type.AnvilCart;
+import ltd.pepper.pepperminecart.type.ContainerCart;
+import ltd.pepper.pepperminecart.type.DispenserCart;
+import ltd.pepper.pepperminecart.type.PlainBlockCart;
+import ltd.pepper.pepperminecart.type.VanillaMinecartCart;
+import ltd.pepper.pepperminecart.type.WorkstationCart;
 import org.bstats.bukkit.Metrics;
+import org.bukkit.event.Listener;
 import org.bukkit.plugin.ServicePriority;
 import org.bukkit.plugin.java.JavaPlugin;
 import org.bukkit.scheduler.BukkitTask;
 
-/** PepperMinecart 主类：加载配置、注册内置矿车类型、启动引擎与监听器、注册对外服务。
- *  注意：类不可声明为 final —— MockBukkit 以 ByteBuddy 子类化主类加载插件。 */
+/**
+ * PepperMinecart 主类：只负责组装——读取配置、准备领地保护、注册内置矿车类型、启动引擎与监听器、
+ * 发布对外服务。注意：类不可声明为 final（MockBukkit 会子类化主类来加载插件）。
+ */
 public class PepperMinecartPlugin extends JavaPlugin {
 
     /** bStats 插件 ID：在 https://bstats.org 注册后替换（0 = 暂不启用统计）。 */
@@ -37,42 +38,34 @@ public class PepperMinecartPlugin extends JavaPlugin {
     private static final int LINKAGE_RECHECK_ATTEMPTS = 15;
 
     private PluginConfig config;
-    private CartEngine engine;
-    private CartSessionManager sessions;
-    private AnvilDamageTracker anvilTracker;
     private ProtectionGateway protection;
+    private CartRegistry registry;
+    private CartManager carts;
 
-    // ---- 内部访问器（测试与引擎内部装配用，非公开 API） ----
+    // ---- 供测试使用（非公开 API） ----
 
     PluginConfig pluginConfig() {
         return config;
-    }
-
-    CartEngine engine() {
-        return engine;
-    }
-
-    CartSessionManager sessions() {
-        return sessions;
-    }
-
-    AnvilDamageTracker anvilTracker() {
-        return anvilTracker;
     }
 
     ProtectionGateway protectionGateway() {
         return protection;
     }
 
+    CartRegistry registry() {
+        return registry;
+    }
+
+    CartManager carts() {
+        return carts;
+    }
+
     @Override
     public void onEnable() {
-        // 主树文件生命周期由 PepperLib ConfigFileStore 承担（构造即 copy-once 材质化 + 注释文档
-        // + 绑定 + post-load，装载告警已由 PluginConfig 打印），故不再 saveDefaultConfig()
-        // 与启动期二次 reload；/pm reload 仍走 store.reload()。
+        // 配置文件的生命周期由 PepperLib ConfigFileStore 负责（首次启动写出带注释的默认文件），无需 saveDefaultConfig()
         this.config = new PluginConfig(this);
 
-        // 领地保护组合根：EVENTS 策略 = 历史伪方块事件；PEPPERCLAIM 策略 = PepperClaim 联动 API。
-        // 两策略注入网关，后端档位与 respect-protection 由配置实时驱动（/pm reload 生效）。
+        // 领地保护：EVENTS = 伪造原版方块事件（兼容各种保护插件）；PEPPERCLAIM = PepperClaim 联动 API
         this.protection = new ProtectionGateway(
                 config::respectProtection,
                 config::protectionBackend,
@@ -80,70 +73,55 @@ public class PepperMinecartPlugin extends JavaPlugin {
                 new PepperClaimProtection(getLogger()));
         logProtectionBackend();
 
-        CartTypeRegistry registry = new CartTypeRegistry(getLogger());
+        InteractionCooldown cooldown = new InteractionCooldown(config);
+        CartMenus menus = new CartMenus();
+        this.registry = new CartRegistry(getLogger());
+        PlainBlockCart plainBlock = new PlainBlockCart();
+        this.carts = new CartManager(this, config, registry, menus, protection, cooldown, plainBlock);
 
-        // 按序构建：引擎 → 铁砧追踪 → 会话管理 → 引擎注入会话（销毁时需回写容器）
-        this.engine = new CartEngine(this, registry, config);
-        this.anvilTracker = new AnvilDamageTracker(config, engine);
-        this.sessions = new CartSessionManager(this, config, anvilTracker);
-        engine.setSessionManager(sessions);
+        // 内置矿车类型：与扩展插件注册的类型走完全相同的接口
+        AnvilCart anvil = new AnvilCart(config);
+        registry.register(this, plainBlock);
+        registry.register(this, new WorkstationCart());
+        registry.register(this, anvil);
+        registry.register(this, new ContainerCart(config));
+        registry.register(this, new DispenserCart(config, protection));
+        registry.register(this, new VanillaMinecartCart(config));
 
-        // 内置矿车类型（全部实现 CartTypeHandler）
-        registry.register(GenericBlockHandler.INSTANCE);
-        registry.register(new SpecialCartHandler());
-        // 内置特殊矿车类型支撑原版特殊矿车实体的识别；被注销/覆盖后死亡掉落会与
-        // 原版掉落重复，因此注册后立即标记为受保护（API 注销/覆盖会被拒绝）。
-        registry.protect(SpecialCartHandler.ID);
-        registry.register(new ContainerHandler(sessions));
-        registry.register(new WorkstationHandler(sessions));
-        registry.register(new AnvilHandler(sessions));
-        registry.register(new DispenserCartHandler(config, sessions, protection));
+        registerListeners(new CartListener(carts), menus, cooldown, anvil);
+        getServer().getServicesManager().register(PepperMinecartAPI.class, carts, this, ServicePriority.Normal);
+        carts.start();
 
-        // 对外服务（供其他插件扩展矿车类型）：先于存量扫描注册服务。
-        // 依赖本插件的扩展插件在本插件 onEnable 返回后才执行自己的 onEnable/registerCartType，
-        // 因此存量扫描延迟到下一个 tick：让所有依赖插件先完成类型注册，避免扩展矿车被误解析为通用处理器。
-        getServer().getServicesManager().register(PepperMinecartAPI.class,
-                new PepperMinecartAPIImpl(registry, engine), this, ServicePriority.Normal);
-
-        // 存量受管矿车：插件启用前已加载的区块不会再触发 ChunkLoadEvent，需主动扫描
-        getServer().getScheduler().runTask(this, engine::registerLoadedCarts);
-
-        // 引擎与监听器
-        engine.start();
-        getServer().getPluginManager().registerEvents(engine, this);
-        getServer().getPluginManager().registerEvents(sessions, this);
-        InteractionCooldown interactionCooldown = new InteractionCooldown(config);
-        getServer().getPluginManager().registerEvents(
-                new InteractionListener(this, engine, registry, config, interactionCooldown, protection), this);
-        // 冷却记录需监听玩家退出做清理（防离线条目泄漏）
-        getServer().getPluginManager().registerEvents(interactionCooldown, this);
-
-        // 命令与权限
-        var cmd = getCommand("pepperminecart");
-        if (cmd != null) {
-            cmd.setExecutor(new PepperMinecartCommand(config, interactionCooldown));
+        var command = getCommand("pepperminecart");
+        if (command != null) {
+            command.setExecutor(new PepperMinecartCommand(config, cooldown));
         } else {
-            // 判空后必须喊出来：命令名与 plugin.yml 不一致时静默启动会让命令永远"未知命令"，极难排查
             getLogger().severe("未找到命令 'pepperminecart'，请检查 plugin.yml 的 commands 段");
         }
 
-        // 统计
         if (BSTATS_PLUGIN_ID > 0) {
             new Metrics(this, BSTATS_PLUGIN_ID);
         }
-
         getLogger().info("PepperMinecart v" + getPluginMeta().getVersion() + " 已启用");
     }
 
+    @Override
+    public void onDisable() {
+        if (carts != null) {
+            carts.shutdown(); // 关闭所有矿车界面并写回，之后服务器才保存世界
+        }
+        getLogger().info("PepperMinecart 已禁用");
+    }
+
+    private void registerListeners(Listener... listeners) {
+        for (Listener listener : listeners) {
+            getServer().getPluginManager().registerEvents(listener, this);
+        }
+    }
+
     /**
-     * 启动可观测日志：实机冒烟（无客户端）唯一的后端观察点。必须出现在 enable 阶段且不含异常。
-     *
-     * <ul>
-     *   <li>检测到 PepperClaim（{@code ClaimApi.get() != null}）→ 后端档位 + {@code PepperClaim 联动 READY}</li>
-     *   <li>未检测到 → 明确降级：{@code PEPPERCLAIM} 档写出「无保护插件可用」，其余档写出「降级为伪事件策略」</li>
-     *   <li>已安装但联动 API 尚未装载完（PepperClaim 的运行时上下文在虚拟线程里异步装载）→ 单独措辞，
-     *       并在就绪后补一条尾部观测（{@link #trackLateLinkage()}），避免冒烟把「装载中」误读为「未安装」</li>
-     * </ul>
+     * 启动时打印一行领地保护后端日志（实机冒烟观察点）。PepperClaim 已安装但联动 API 尚在异步装载时，
+     * 就绪后再补一行（{@link #trackLateLinkage()}），避免把“装载中”误读为“未安装”。
      */
     private void logProtectionBackend() {
         boolean claimReady = PepperClaimProtection.available();
@@ -172,10 +150,7 @@ public class PepperMinecartPlugin extends JavaPlugin {
                 : prefix + "未检测到 PepperClaim，降级为伪事件策略";
     }
 
-    /**
-     * 联动尾部观测：每 {@value #LINKAGE_RECHECK_PERIOD_TICKS} tick 查一次，最长
-     * {@value #LINKAGE_RECHECK_ATTEMPTS} 次（约 15 秒）；就绪即报一行并停止。
-     */
+    /** 每 {@value #LINKAGE_RECHECK_PERIOD_TICKS} tick 查一次，最多 {@value #LINKAGE_RECHECK_ATTEMPTS} 次；就绪即报一行并停止。 */
     private void trackLateLinkage() {
         BukkitTask[] task = new BukkitTask[1];
         int[] attempts = {0};
@@ -188,17 +163,5 @@ public class PepperMinecartPlugin extends JavaPlugin {
                 task[0].cancel();
             }
         }, LINKAGE_RECHECK_PERIOD_TICKS, LINKAGE_RECHECK_PERIOD_TICKS);
-    }
-
-    @Override
-    public void onDisable() {
-        // 兜底保存打开的容器会话，防止虚拟界面物品丢失
-        if (sessions != null) {
-            sessions.closeAll();
-        }
-        if (engine != null) {
-            engine.shutdown();
-        }
-        getLogger().info("PepperMinecart 已禁用");
     }
 }

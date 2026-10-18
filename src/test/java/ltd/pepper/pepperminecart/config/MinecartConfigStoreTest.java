@@ -11,7 +11,6 @@ import java.nio.file.Path;
 import java.util.List;
 import ltd.pepper.lib.config.ConfigFileStore;
 import ltd.pepper.lib.config.ConfigValues;
-import ltd.pepper.pepperminecart.api.TakeOffResult;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -43,7 +42,7 @@ class MinecartConfigStoreTest {
         Path file = dataFolder.resolve("config.yml");
         assertTrue(Files.exists(file), "首跑材质化");
         assertTrue(store.text().contains("PepperMinecart 配置文件"), "头部注释随文件保留");
-        assertEquals(TakeOffResult.INVENTORY, store.get().takeOffMode);
+        assertEquals(TakeOffMode.INVENTORY, store.get().takeOffMode);
         assertTrue(store.lastIssues().isEmpty(), "发布配置装载无告警: " + store.lastIssues());
 
         Files.writeString(
@@ -52,7 +51,7 @@ class MinecartConfigStoreTest {
             StandardCharsets.UTF_8);
         ConfigFileStore<MinecartConfigModel> again = loadStore();
 
-        assertEquals(TakeOffResult.DROP, again.get().takeOffMode, "copy-once：管理员改动保留");
+        assertEquals(TakeOffMode.DROP, again.get().takeOffMode, "copy-once：管理员改动保留");
     }
 
     /** 注释面：条目注释可查询、可原地替换（字节保真），不影响其它条目。 */

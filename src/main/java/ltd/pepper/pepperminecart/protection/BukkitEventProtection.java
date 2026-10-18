@@ -3,12 +3,12 @@ package ltd.pepper.pepperminecart.protection;
 import java.util.Optional;
 import ltd.pepper.pepperminecart.api.event.CartBlockPlaceEvent;
 import ltd.pepper.pepperminecart.api.event.CartBlockTakeOffEvent;
-import ltd.pepper.pepperminecart.display.CartBlockDisplay;
-import ltd.pepper.pepperminecart.storage.CartData;
+import ltd.pepper.pepperminecart.cart.CartData;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
+import org.bukkit.block.data.BlockData;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
@@ -18,7 +18,7 @@ import org.bukkit.inventory.EquipmentSlot;
 import org.bukkit.inventory.ItemStack;
 
 /**
- * 伪事件后端：历史「模拟原版方块事件」策略的等价搬家（从 {@code InteractionListener} 原样迁出）。
+ * 伪事件后端：模拟原版方块事件，兼容只认 BlockPlaceEvent/BlockBreakEvent 的保护插件（1.0 版本的唯一保护手段）。
  *
  * <p>每个动作依次发两个事件，任一被取消即拒绝：</p>
  * <ol>
@@ -104,13 +104,21 @@ public final class BukkitEventProtection implements ClaimProtection {
         return !event.isCancelled();
     }
 
-    /** 取下材质来源与 {@code InteractionListener.originalMaterialOf} 同源：存储物品优先，显示方块兜底。 */
+    /** 矿车上的方块：保存的方块物品优先；没有（例如原版箱子矿车）时取矿车显示的方块。 */
     private static Material originalMaterialOf(Minecart cart) {
         if (cart == null) {
             return Material.AIR;
         }
-        ItemStack stored = CartData.getItem(cart);
-        return stored != null ? stored.getType() : new CartBlockDisplay(cart).material();
+        try {
+            ItemStack stored = CartData.blockItem(cart);
+            if (stored != null) {
+                return stored.getType();
+            }
+        } catch (RuntimeException ignored) {
+            // 数据损坏时按显示的方块判定
+        }
+        BlockData display = cart.getDisplayBlockData();
+        return display == null ? Material.AIR : display.getMaterial();
     }
 
     private static Minecart cartAt(Location location) {

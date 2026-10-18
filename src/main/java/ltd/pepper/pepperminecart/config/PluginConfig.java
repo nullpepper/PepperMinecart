@@ -12,7 +12,6 @@ import ltd.pepper.lib.config.ConfigValues;
 import ltd.pepper.lib.config.IssueCollector;
 import ltd.pepper.lib.config.IssueLevel;
 import ltd.pepper.lib.yaml.YamlMap;
-import ltd.pepper.pepperminecart.api.TakeOffResult;
 import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import org.bukkit.Material;
 import org.bukkit.plugin.java.JavaPlugin;
@@ -157,7 +156,7 @@ public class PluginConfig {
 
     // ---- getters ----
 
-    public TakeOffResult takeOffMode() {
+    public TakeOffMode takeOffMode() {
         return current.takeOffMode;
     }
 

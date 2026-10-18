@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import ltd.pepper.pepperminecart.api.TakeOffResult;
 import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import java.util.HashMap;
 import java.util.List;
@@ -91,7 +90,7 @@ class PluginConfigTest {
     @Test
     void defaults() {
         PluginConfig config = configWith(Map.of());
-        assertEquals(TakeOffResult.INVENTORY, config.takeOffMode());
+        assertEquals(TakeOffMode.INVENTORY, config.takeOffMode());
         assertTrue(config.allowAllBlocks());
         assertTrue(config.isBlockAllowed(Material.DIAMOND_BLOCK));
         assertTrue(config.respectProtection());
@@ -127,7 +126,7 @@ class PluginConfigTest {
         values.put("dispenser-cart.eject-speed", 0.9);
         PluginConfig config = configWith(values);
 
-        assertEquals(TakeOffResult.DROP, config.takeOffMode());
+        assertEquals(TakeOffMode.DROP, config.takeOffMode());
         assertFalse(config.allowAllBlocks());
         assertTrue(config.isBlockAllowed(Material.CHEST));
         assertFalse(config.isBlockAllowed(Material.DIAMOND_BLOCK));
@@ -160,7 +159,7 @@ class PluginConfigTest {
                 "anvil-damage.chance-per-use", 2.0,
                 "dispenser-cart.cooldown-ticks", 0
         ));
-        assertEquals(TakeOffResult.INVENTORY, config.takeOffMode());
+        assertEquals(TakeOffMode.INVENTORY, config.takeOffMode());
         assertEquals(0, config.interactionCooldownMs());
         assertEquals(1.0, config.anvilDamageChance(), 1e-9);
         assertEquals(1, config.dispenserCooldownTicks());
