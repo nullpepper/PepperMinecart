@@ -22,6 +22,8 @@ import org.bukkit.SoundCategory;
 import org.bukkit.SoundGroup;
 import org.bukkit.World;
 import org.bukkit.block.data.BlockData;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.EntityType;
 import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.RideableMinecart;
@@ -131,7 +133,7 @@ public final class CartManager implements PepperMinecartAPI {
             return true; // 合法但点得太快：吞掉这次点击
         }
 
-        consumeOne(player, hand);
+        ItemStack remainder = consumeOne(player, hand);
         ManagedCartImpl cart = null;
         try {
             CartData.write(minecart, type.id(), block);
@@ -158,7 +160,7 @@ public final class CartManager implements PepperMinecartAPI {
                 minecart.setDisplayBlockData(null);
                 untrack(minecart);
             }
-            refundHand(player, hand);
+            refundHand(player, hand, remainder);
             plugin.getLogger().log(Level.WARNING, "放置方块到矿车 " + minecart.getUniqueId() + " 时出错，已回滚", e);
             return false;
         }
@@ -182,27 +184,36 @@ public final class CartManager implements PepperMinecartAPI {
         return display != null && !display.getMaterial().isAir();
     }
 
-    /** 与原版放置方块一致：创造模式不消耗物品。 */
-    private static void consumeOne(Player player, ItemStack hand) {
+    /**
+     * 与原版放置方块一致：创造模式不消耗物品。
+     *
+     * @return 扣除之后玩家主手剩下的东西（{@code null} 表示用完了），放置事务失败时用来判断
+     *         主手是否还是扣除后的样子
+     */
+    private static @Nullable ItemStack consumeOne(Player player, ItemStack hand) {
         if (player.getGameMode() == GameMode.CREATIVE) {
-            return;
+            return hand;
         }
-        player.getInventory().setItemInMainHand(hand.getAmount() > 1 ? hand.asQuantity(hand.getAmount() - 1) : null);
+        ItemStack remainder = hand.getAmount() > 1 ? hand.asQuantity(hand.getAmount() - 1) : null;
+        player.getInventory().setItemInMainHand(remainder);
+        return remainder;
     }
 
     /**
-     * 放置事务失败时把方块还给玩家：创造模式不还（本来就没扣），主手空着就放回主手，
-     * 否则进背包、背包也满就掉在脚下——不要覆盖玩家此刻手上的东西。
+     * 放置事务失败时把扣掉的那一个方块还给玩家。主手还是扣除后的样子就直接补回整摞（不覆盖玩家
+     * 此刻手上的东西）；主手已经被别的代码动过，就把这一个方块退到背包，放不下再掉在脚下。
      */
-    private static void refundHand(Player player, ItemStack hand) {
+    private static void refundHand(Player player, ItemStack hand, @Nullable ItemStack remainder) {
         if (player.getGameMode() == GameMode.CREATIVE) {
             return;
         }
-        if (player.getInventory().getItemInMainHand().isEmpty()) {
+        ItemStack current = player.getInventory().getItemInMainHand();
+        boolean untouched = remainder == null ? current.isEmpty() : current.isSimilar(remainder);
+        if (untouched) {
             player.getInventory().setItemInMainHand(hand);
             return;
         }
-        for (ItemStack leftover : player.getInventory().addItem(hand).values()) {
+        for (ItemStack leftover : player.getInventory().addItem(hand.asOne()).values()) {
             player.getWorld().dropItem(player.getLocation(), leftover);
         }
     }
@@ -327,17 +338,40 @@ public final class CartManager implements PepperMinecartAPI {
     /**
      * 用另一种矿车实体替换旧实体（{@link ManagedCart#convertTo} 的实现）。
      * 旧实体先清掉插件数据与库存再移除，这样它的移除不会被当成“摧毁”，原版也不会把库存撒出来。
+     *
+     * <p>乘客与显示方块要跟着搬过去：不搬乘客会让车上的人掉下来，不搬显示方块会让仍在矿车上的
+     * 方块凭空消失。原版箱车之类会自己画出方块的实体不搬显示方块，否则会和原版外观叠在一起。</p>
      */
     <T extends Minecart> T replaceEntity(Minecart old, Class<T> minecartClass, String typeNamespace) {
+        List<Entity> passengers = List.copyOf(old.getPassengers());
         T replacement = old.getWorld().spawn(old.getLocation(), minecartClass, created -> {
             created.setVelocity(old.getVelocity());
             created.customName(old.customName());
             created.setCustomNameVisible(old.isCustomNameVisible());
             old.getScoreboardTags().forEach(created::addScoreboardTag);
+            if (created.getType() == EntityType.MINECART) {
+                created.setDisplayBlockData(old.getDisplayBlockData());
+                created.setDisplayBlockOffset(old.getDisplayBlockOffset());
+            }
             old.getPersistentDataContainer().copyTo(created.getPersistentDataContainer(), true);
         });
         if (!replacement.isValid()) {
+            // 生成被其他插件取消时实体已经被丢弃，这里没有可清理的东西
             throw new IllegalStateException("无法生成 " + minecartClass.getSimpleName() + "（可能被其他插件取消）");
+        }
+        try {
+            for (Entity passenger : passengers) {
+                // 必须先让乘客离开旧车：旧实体被移除时会把仍在它名下的乘客一并甩下，
+                // 直接 addPassenger 会让乘客同时挂在两辆车上，随后被旧车的清理顺手摘掉。
+                if (passenger.isInsideVehicle()) {
+                    passenger.leaveVehicle();
+                }
+                replacement.addPassenger(passenger);
+            }
+        } catch (RuntimeException e) {
+            // 乘客搬不过去就当作没替换过：留着新实体只会变成一辆多出来的矿车
+            replacement.remove();
+            throw e;
         }
         CartData.clear(old, typeNamespace);
         if (old instanceof InventoryHolder holder) {
@@ -354,6 +388,30 @@ public final class CartManager implements PepperMinecartAPI {
     void trackIfManaged(Minecart minecart) {
         if (CartData.isManaged(minecart)) {
             track(minecart);
+            restoreDisplayIfLost(minecart);
+        }
+    }
+
+    /**
+     * 显示方块被别的插件（或别的代码路径）清掉时，按矿车上保存的方块物品补回来。
+     * 没有这一步，受管矿车会在管理员眼里变成「隐形」的：PDC 仍在、能 tick、却什么也不显示。
+     */
+    private void restoreDisplayIfLost(Minecart minecart) {
+        if (showsBlock(minecart)) {
+            return;
+        }
+        ManagedCartImpl cart;
+        try {
+            cart = find(minecart);
+        } catch (RuntimeException e) {
+            return; // 数据坏掉的矿车交给 tick 的屏障去处理，这里只负责显示
+        }
+        if (cart == null) {
+            return;
+        }
+        ItemStack block = cart.blockItem();
+        if (block != null && !block.getType().isAir()) {
+            cart.showBlock(block);
         }
     }
 
@@ -434,6 +492,7 @@ public final class CartManager implements PepperMinecartAPI {
 
     @Override
     public void unregisterCartType(NamespacedKey id) {
+        Objects.requireNonNull(id, "id");
         if (CartData.NAMESPACE.equals(id.getNamespace())) {
             throw new IllegalArgumentException("内置矿车类型不可注销: " + id);
         }

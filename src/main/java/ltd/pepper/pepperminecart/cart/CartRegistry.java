@@ -4,6 +4,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -36,11 +37,21 @@ public final class CartRegistry {
         if (id == null || FORBIDDEN_NAMESPACES.contains(id.getNamespace())) {
             throw new IllegalArgumentException("矿车类型 id 不能为空，也不能使用 minecraft/bukkit 命名空间: " + id);
         }
-        Set<Material> blocks = Set.copyOf(type.blocks());
-        for (Material block : blocks) {
+        Set<Material> declared = type.blocks();
+        if (declared == null) {
+            throw new IllegalArgumentException("矿车类型 " + id + " 的 blocks() 返回了 null");
+        }
+        // 逐个校验而不是 Set.copyOf：null 元素或 null 集合要让调用方看到自己的错误，
+        // 而不是在注册中途抛一个与自己无关的 NullPointerException
+        Set<Material> blocks = new LinkedHashSet<>();
+        for (Material block : declared) {
+            if (block == null) {
+                throw new IllegalArgumentException("矿车类型 " + id + " 声明了 null 方块");
+            }
             if (!block.isBlock()) {
                 throw new IllegalArgumentException("矿车类型 " + id + " 声明了非方块材质: " + block);
             }
+            blocks.add(block);
         }
 
         if (byId.containsKey(id)) {
@@ -56,8 +67,8 @@ public final class CartRegistry {
         }
     }
 
-    public void unregister(NamespacedKey id) {
-        Registration removed = byId.remove(id);
+    public void unregister(@Nullable NamespacedKey id) {
+        Registration removed = id == null ? null : byId.remove(id);
         if (removed != null) {
             byBlock.values().removeIf(type -> type == removed.type());
         }

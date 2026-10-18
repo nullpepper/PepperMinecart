@@ -25,12 +25,14 @@ import org.bukkit.inventory.meta.ItemMeta;
 import org.jetbrains.annotations.Nullable;
 
 /**
- * 容器方块（木桶、投掷器、潜影盒、酿造台……）：右键打开它的原版界面，内容保存在矿车上的方块物品里。
+ * 容器方块（木桶、投掷器、潜影盒……）：右键打开它的原版界面，内容保存在矿车上的方块物品里。
  *
  * <p>方块物品本身就能装东西（原版的 {@code minecraft:container} 组件，潜影盒就是这样随身携带内容的），
  * 所以取下或破坏矿车时交还的是带着内容的方块物品，放回世界就是原来那个容器。
- * 界面使用该方块的原版界面类型，槽位规则（潜影盒里不能放潜影盒、燃料槽只放燃料……）由原版负责。
- * 方块并不真的在世界里，所以熔炉不会烧炼、酿造台不会酿造，它们在矿车上只用来储物。</p>
+ * 界面使用该方块的原版界面类型，槽位规则（潜影盒里不能放潜影盒……）由原版负责。
+ * 方块并不真的在世界里，方块自己的逻辑（烧炼、酿造、合成）不会运行，所以只有「原版界面的槽位
+ * 当储物柜也够用」的方块留在这里：烟熏炉、高炉、酿造台的本体逻辑不来，界面又只开放它们的专用槽位，
+ * 留着只会让人以为能用，已改为普通方块。</p>
  *
  * <p>取下规则受 {@code container-pickup-policy} 约束（潜影盒除外，它本就是随身容器）。</p>
  */
@@ -54,11 +56,13 @@ public class ContainerCart implements CartType {
         this.config = config;
     }
 
-    /** 箱子与漏斗不在其中：它们会变成原版的箱子矿车、漏斗矿车（见 {@link VanillaMinecartCart}）。 */
+    /**
+     * 箱子与漏斗不在其中：它们会变成原版的箱子矿车、漏斗矿车（见 {@link VanillaMinecartCart}）。
+     * 烟熏炉、高炉、酿造台也不在其中：矿车不会驱动方块的逻辑，它们的原版界面只剩用不上的专用槽位。
+     */
     private static Set<Material> defaultBlocks() {
         Set<Material> blocks = new HashSet<>(Tag.SHULKER_BOXES.getValues());
-        blocks.addAll(Set.of(Material.BARREL, Material.TRAPPED_CHEST, Material.DROPPER,
-                Material.BREWING_STAND, Material.CRAFTER));
+        blocks.addAll(Set.of(Material.BARREL, Material.TRAPPED_CHEST, Material.DROPPER, Material.CRAFTER));
         return blocks;
     }
 

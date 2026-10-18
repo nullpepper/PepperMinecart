@@ -1,0 +1,57 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & test（Paper 1.21.4 / JDK 21）
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # PepperLib 是 compileOnly / testImplementation 的前置库（坐标 ltd.pepper:pepper-lib:<pepperLibVersion>），
+      # 只发布在开发机的 mavenLocal，公共 Maven 上没有。这里按 gradle.properties 声明的版本，回放到该版本
+      # 最后一次出现的 PepperLib 源码提交，发布进 runner 的 mavenLocal：
+      #   - `verifyPepperLibVersion` 要求「声明版本 == 解析版本」，所以必须发布成声明的那个版本；
+      #   - 换版本时同步改下面的 ref，用
+      #     `git log -S'version = "x.y.z"' -- build.gradle.kts gradle.properties` 找对应提交。
+      - name: Checkout PepperLib 0.15.0
+        uses: actions/checkout@v4
+        with:
+          repository: nullpepper/PepperLib
+          ref: 26f823016a4418b0553a41440a0f61c195b7783d
+          path: .ci/PepperLib
+
+      - name: Publish PepperLib to mavenLocal
+        working-directory: .ci/PepperLib
+        run: ./gradlew publishToMavenLocal -x test --no-daemon
+
+      # build → check（test + verifyPepperLibVersion）+ shadowJar，与本地发布前的验证一致。
+      - name: Build and test
+        run: ./gradlew build --no-daemon
+
+      - name: Upload plugin jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: PepperMinecart-all
+          path: build/libs/PepperMinecart-*-all.jar
+          if-no-files-found: error

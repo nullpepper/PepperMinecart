@@ -64,14 +64,15 @@ public final class CartListener implements Listener {
         }
     }
 
-    @EventHandler(priority = EventPriority.MONITOR)
+    @EventHandler(priority = EventPriority.MONITOR, ignoreCancelled = true)
     public void onMove(VehicleMoveEvent event) {
         if (event.getVehicle() instanceof Minecart minecart) {
             carts.onMove(minecart);
         }
     }
 
-    @EventHandler
+    /** 与旧版一致用 HIGHEST：被别的插件取消过的移除不该再触发本插件的销毁处理。 */
+    @EventHandler(priority = EventPriority.HIGHEST)
     public void onRemove(EntityRemoveEvent event) {
         if (event.getEntity() instanceof Minecart minecart) {
             carts.onRemoved(minecart, event.getCause());

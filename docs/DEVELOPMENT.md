@@ -101,10 +101,27 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew clean build
 ```
 
 - `PlacementTest`、`TakeOffTest`、`DestroyTest`、`RidingTest`、`CartMenuTest`、`VanillaMinecartTest`、
-  `CartTypeApiTest`、`ProtectionIntegrationTest`：加载真实插件的 MockBukkit 集成测试，按玩家可见的行为断言；
+  `CartTypeApiTest`、`ProtectionIntegrationTest`、`RobustnessTest`：加载真实插件的 MockBukkit 集成测试，按玩家可见的行为断言
+  （`RobustnessTest` 专门盯失败路径：交付被取消、放置回调抛异常、存档数据损坏、实体转换）；
 - `type` 包下的测试：用内存中的 `InMemoryCart` 单独测试每个内置类型
   （MockBukkit 序列化物品时会丢失容器内容，涉及内容的断言放在这一层）；
 - `config`、`protection`、`cooldown`：各自模块的单元测试。
 
 MockBukkit 的已知限制：不能构建 `MenuType` 界面（工作站/铁砧界面的打开只验证对应关系），没有方块音效组
 （测试中关闭音效），激活铁轨的方块数据不是 `RedstoneRail`（测试中用代理）。新增功能或修复问题时请同步补充测试。
+
+## 8. 2.0.0 迁移注意
+
+破坏性变更的完整清单见 CHANGELOG，下面三条最容易踩：
+
+- **`ManagedCart#dropItem` 现在返回 `boolean`**：表示这一件是否真的交付成功。注意 Paper 的
+  `World#dropItem(Naturally)` 即使生成被 `ItemSpawnEvent` 取消也照样返回实体、**从不返回 null**，
+  判断取消只能用 `Item#isValid()`（被取消的实体已被 discard）。插件自己的交付原语 `CartManager#deliver`
+  就是这么判的，扩展插件要判断交付结果请照做。
+- **受管判定收窄为「PDC 里有类型键」**：`CartData#isManaged` 只看 `pepperminecart:cart-type`，
+  旧版「有方块物品键也算」的 OR 分支与 `PepperMinecartAPI#isManagedCart(Minecart)` 都已删除。
+  需要判断一辆矿车是否受管时，用 `PepperMinecartAPI#getCart(Minecart) != null`。
+- **不再有异常屏障**：除 tick 循环外，扩展回调抛出的异常会直接冒泡到 Bukkit 事件系统（旧版会吞掉异常
+  并取保守结果）。依赖这一点的扩展需要自己 `try/catch`。
+- **`pepperminecart:cart-type` 损坏时按普通方块处理**：`CartData#type` 解析失败返回 `null`，
+  `CartManager#find` 会退到 `nativeBlock` / 默认类型，不会删除数据。
