@@ -5,6 +5,7 @@ import java.util.Set;
 import ltd.pepper.pepperminecart.api.CartType;
 import ltd.pepper.pepperminecart.api.ManagedCart;
 import ltd.pepper.pepperminecart.config.PluginConfig;
+import org.bukkit.Bukkit;
 import org.bukkit.GameRule;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -87,21 +88,31 @@ public final class VanillaMinecartCart implements CartType {
         ItemStack block = cart.blockItem();
         Minecart minecart = cart.convertTo(MINECART_FOR_BLOCK.get(block.getType()));
 
-        // 箱子、漏斗里装的东西搬进矿车；装不下的（以及熔炉里的东西，熔炉矿车没有库存）掉在原地
+        // 箱子、漏斗里装的东西搬进矿车；装不下的（以及熔炉里的东西，熔炉矿车没有库存）掉在原地。
+        // 掉落被其他插件取消时（dropItem 返回 false）把那一件留在方块物品里，别让它既没进矿车
+        // 也没掉出来——取下矿车时玩家还能连同方块一起拿回
         ItemStack[] contents = BlockItems.contents(block);
         Inventory inventory = minecart instanceof InventoryHolder holder ? holder.getInventory() : null;
+        ItemStack[] kept = new ItemStack[contents.length];
+        boolean anyKept = false;
         for (int slot = 0; slot < contents.length; slot++) {
+            ItemStack content = contents[slot];
+            if (content == null || content.isEmpty()) {
+                continue;
+            }
             if (inventory != null && slot < inventory.getSize()) {
-                inventory.setItem(slot, contents[slot]);
-            } else if (contents[slot] != null && !contents[slot].isEmpty()) {
-                cart.dropItem(contents[slot]);
+                inventory.setItem(slot, content);
+            } else if (!cart.dropItem(content)) {
+                kept[slot] = content;
+                anyKept = true;
             }
         }
         if (minecart instanceof CommandMinecart commandMinecart) {
             commandMinecart.setCommand(BlockItems.command(block));
         }
-        // 方块物品留作取下时的模板（保留自定义名等）；内容此后由原版矿车保管，不再重复保存
-        cart.setBlockItem(BlockItems.withContents(block, new ItemStack[0]));
+        // 方块物品留作取下时的模板（保留自定义名等）；已装进矿车的内容由原版矿车保管、不再重复保存，
+        // 只有没能掉出去的那几件继续留在里面
+        cart.setBlockItem(BlockItems.withContents(block, anyKept ? kept : new ItemStack[0]));
     }
 
     @Override
@@ -115,6 +126,9 @@ public final class VanillaMinecartCart implements CartType {
         if (block == null) {
             return null;
         }
+        // 先把内容物落进矿车的方块物品：清库存与换实体都可能出问题（换实体要过别的插件的事件），
+        // 落盘之后再动手，任何一步失败都不会让箱子/漏斗里的东西只存在于这个局部变量里
+        cart.setBlockItem(block);
         if (cart.minecart() instanceof InventoryHolder holder) {
             holder.getInventory().clear(); // 内容已经装进方块物品
         }
@@ -135,14 +149,21 @@ public final class VanillaMinecartCart implements CartType {
             return; // 原版会掉落“箱子矿车”这类物品，方块已经包含在里面
         }
         // 其余移除方式原版不掉矿车物品，把方块补掉出来。容器内容像破坏箱子一样撒在地上
-        // （原版移除容器矿车时通常已经撒过，这里只处理剩下的）
+        // （原版移除容器矿车时通常已经撒过，这里只处理剩下的）。此时矿车正在消失，掉落再被取消就
+        // 没有地方收留了，只能留下日志说明丢了什么
         if (minecart instanceof InventoryHolder holder) {
-            BlockItems.nonEmpty(holder.getInventory().getContents()).forEach(cart::dropItem);
+            for (ItemStack content : BlockItems.nonEmpty(holder.getInventory().getContents())) {
+                if (!cart.dropItem(content)) {
+                    Bukkit.getLogger().warning("矿车 " + minecart.getUniqueId() + " 被摧毁时内容物掉落被取消，"
+                            + content.getType() + " x" + content.getAmount() + " 已丢失");
+                }
+            }
             holder.getInventory().clear();
         }
         ItemStack block = withCartState(cart);
-        if (block != null) {
-            cart.dropItem(block);
+        if (block != null && !cart.dropItem(block)) {
+            Bukkit.getLogger().warning("矿车 " + minecart.getUniqueId() + " 被摧毁时方块掉落被取消，"
+                    + block.getType() + " x" + block.getAmount() + " 已丢失");
         }
     }
 
@@ -154,11 +175,30 @@ public final class VanillaMinecartCart implements CartType {
         }
         Minecart minecart = cart.minecart();
         if (minecart instanceof InventoryHolder holder) {
-            block = BlockItems.withContents(block, holder.getInventory().getContents());
+            block = BlockItems.withContents(block,
+                    mergeContents(BlockItems.contents(block), holder.getInventory().getContents()));
         }
         if (minecart instanceof CommandMinecart command) {
             block = BlockItems.withCommand(block, command.getCommand());
         }
         return block;
+    }
+
+    /**
+     * 合并方块物品里留下的内容与矿车库存：矿车占自己的槽位，矿车之外（当初装不下而留下的）
+     * 保持原样，这样放置时没能掉出去的东西不会在取下时被库存覆盖掉。
+     */
+    private static ItemStack[] mergeContents(ItemStack[] kept, ItemStack[] live) {
+        int size = Math.max(kept.length, live.length);
+        ItemStack[] merged = new ItemStack[size];
+        for (int slot = 0; slot < size; slot++) {
+            ItemStack fromCart = slot < live.length ? live[slot] : null;
+            if (fromCart != null && !fromCart.isEmpty()) {
+                merged[slot] = fromCart;
+            } else if (slot < kept.length) {
+                merged[slot] = kept[slot];
+            }
+        }
+        return merged;
     }
 }

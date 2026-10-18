@@ -45,7 +45,7 @@ final class BlockItems {
         return copy;
     }
 
-    /** 该容器方块的原版界面类型（木桶 → BARREL，烟熏炉 → SMOKER……）；不是容器时返回 null。 */
+    /** 该容器方块的原版界面类型（木桶 → BARREL，潜影盒 → SHULKER_BOX……）；不是容器时返回 null。 */
     static @Nullable InventoryType inventoryType(ItemStack blockItem) {
         Container container = container(blockItem);
         return container == null ? null : container.getSnapshotInventory().getType();

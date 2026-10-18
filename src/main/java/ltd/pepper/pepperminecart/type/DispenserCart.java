@@ -95,18 +95,14 @@ public final class DispenserCart extends ContainerCart {
                 random.nextDouble(-1, 1) * offset);
         Vector direction = new Vector(random.nextDouble() - 0.5, random.nextDouble() * 0.4 + 0.2, random.nextDouble() - 0.5);
         Vector velocity = direction.normalize().multiply(config.dispenserEjectSpeed());
-        // 先弹出，成功后才从库存里扣：弹出被其他插件取消时物品留在矿车里，也不进入冷却
+        // 先扣库存再弹出：dropItem 会同步触发 ItemSpawnEvent，扣减与弹出之间若让外部监听器插进来，
+        // 就可能出现“东西弹出去了却没扣掉”的复制。弹出失败（被取消）时再把刚扣掉的还回去
+        inventory.setItem(slot, stack.getAmount() > 1 ? stack.asQuantity(stack.getAmount() - 1) : null);
         var ejected = minecart.getWorld().dropItem(from, stack.asOne(), item -> item.setVelocity(velocity));
         if (ejected == null || !ejected.isValid()) {
+            inventory.setItem(slot, stack); // 弹出被取消：还回刚扣掉的那一件
             return false;
         }
-        // dropItem 会同步触发 ItemSpawnEvent，外部监听器可能在这一瞬间改过这一格：
-        // 只有确认还是同一份物品时才扣减，不要用过期快照覆盖玩家的改动
-        ItemStack now = inventory.getItem(slot);
-        if (now == null || !now.isSimilar(stack)) {
-            return false;
-        }
-        inventory.setItem(slot, now.getAmount() > 1 ? now.asQuantity(now.getAmount() - 1) : null);
         save(cart, inventory);
         minecart.getWorld().playSound(minecart.getLocation(), Sound.BLOCK_DISPENSER_DISPENSE, SoundCategory.BLOCKS, 1.0F, 1.0F);
         return true;

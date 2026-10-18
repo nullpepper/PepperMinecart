@@ -22,6 +22,8 @@ import org.bukkit.entity.Minecart;
 import org.bukkit.entity.Player;
 import org.bukkit.entity.minecart.HopperMinecart;
 import org.bukkit.entity.minecart.RideableMinecart;
+import org.bukkit.event.EventHandler;
+import org.bukkit.event.Listener;
 import org.bukkit.event.entity.EntityMountEvent;
 import org.bukkit.inventory.ItemStack;
 import org.bukkit.persistence.PersistentDataType;
@@ -114,6 +116,39 @@ class RobustnessTest extends CartTestSupport {
     }
 
     @Test
+    void refusedPassengerAbortsTheConversionAndKeepsEveryoneOnTheOldCart() {
+        api.registerCartType(MockBukkit.createMockPlugin("seats"), new TakeOffTest.SeatCart());
+        PlayerMock player = newPlayer();
+        Minecart cart = placeOnNewCart(player, Material.OAK_STAIRS);
+        PlayerMock rider = newPlayer();
+        assertTrue(cart.addPassenger(rider), "前置：该类型允许乘坐");
+        // 换乘时别的插件取消了挂载：Entity#addPassenger 只返回 false，不抛异常
+        server.getPluginManager().registerEvents(new CancelMountsToOtherVehicles(cart), plugin);
+
+        assertThrows(IllegalStateException.class, () -> managed(cart).convertTo(HopperMinecart.class),
+                "搬不走乘客就要中止这次转换，不能装作成功");
+
+        assertEquals(1, world.getEntitiesByClass(Minecart.class).size(), "取消的转换不能留下第二辆矿车");
+        assertTrue(cart.isValid(), "旧矿车必须还在");
+        assertNotNull(api.getCart(cart), "旧矿车仍然是受管的");
+        assertEquals(1, cart.getPassengers().size(), "乘客要被还回旧车，不能留在原地");
+        assertSame(rider, cart.getPassengers().get(0));
+    }
+
+    @Test
+    void aThrowingTakeOffKeepsTheCartIntactAndGivesNothingAway() {
+        api.registerCartType(plugin, new ThrowingTakeOffCart());
+        PlayerMock player = newPlayer();
+        Minecart cart = placeOnNewCart(player, Material.LODESTONE);
+
+        assertTrue(sneakRightClick(player, cart).isCancelled(), "回调抛异常也不能把这次点击交给原版");
+
+        assertNotNull(api.getCart(cart), "矿车要保持在受管状态");
+        assertTrue(showsBlock(cart), "方块还在矿车上");
+        assertEquals(0, countInInventory(player, Material.LODESTONE), "没有凭空给出方块");
+    }
+
+    @Test
     void convertingToAPlainCartKeepsTheDisplayedBlock() {
         PlayerMock player = newPlayer();
         Minecart cart = placeOnNewCart(player, Material.GRINDSTONE);
@@ -169,6 +204,44 @@ class RobustnessTest extends CartTestSupport {
         assertThrows(IllegalArgumentException.class, () -> api.registerCartType(plugin, new NonBlockCart()));
         assertThrows(IllegalArgumentException.class, () -> api.registerCartType(plugin, new ReservedNamespaceCart()));
         assertThrows(NullPointerException.class, () -> api.unregisterCartType(null));
+    }
+
+    /** 只允许挂在指定矿车上，其它载具一律取消——模拟「换乘时被别的插件拦下」。 */
+    static final class CancelMountsToOtherVehicles implements Listener {
+
+        private final Minecart allowed;
+
+        CancelMountsToOtherVehicles(Minecart allowed) {
+            this.allowed = allowed;
+        }
+
+        @EventHandler
+        void onMount(EntityMountEvent event) {
+            if (event.getMount() != allowed) {
+                event.setCancelled(true);
+            }
+        }
+    }
+
+    /** 取下时直接抛异常，验证取下路径的异常屏障。 */
+    static final class ThrowingTakeOffCart implements CartType {
+
+        static final NamespacedKey ID = new NamespacedKey("robustnesstest", "throwing-take-off");
+
+        @Override
+        public NamespacedKey id() {
+            return ID;
+        }
+
+        @Override
+        public Set<Material> blocks() {
+            return Set.of(Material.LODESTONE);
+        }
+
+        @Override
+        public ItemStack takeOff(ManagedCart cart) {
+            throw new IllegalStateException("probe: takeOff exploded");
+        }
     }
 
     /** 拒绝载客并数「被询问了几次」，用来证明预取消的事件没有惊动处理器。 */

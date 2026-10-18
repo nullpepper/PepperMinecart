@@ -20,6 +20,7 @@ README「功能特性」「数据与兼容」「扩展指南」各项声明与�
 | 原版矿车：外来矿车可取下、开关关闭交给原版、原版掉落不重复、TNT 爆炸不返还 | `VanillaMinecartCart` | `VanillaMinecartTest` |
 | 扩展 API：注册/保留命名空间/非方块拒绝/内置不可注销/插件禁用自动注销/重注册生效/类型丢失兜底 | `CartManager`（API）、`CartRegistry` | `CartTypeApiTest`、`TakeOffTest`、`DestroyTest` |
 | 扩展钩子：`onUse`、`onTick`、`canPlace`、`displayBlock`、`takeOff`、`convertTo`、冷却 | `CartType`、`ManagedCartImpl` | `CartTypeApiTest` |
+| 已取消的挂载事件不再惊动插件自己的挂载处理 | `CartListener#onMount` | `RobustnessTest#alreadyCancelledMountEventIsLeftAlone` |
 | 取下/放置的交付事务：交付被取消时保留原样、只放回没交付的部分、放置异常归还物品 | `CartManager#takeOff/place/deliver` | `TakeOffTest`、`RobustnessTest` |
 | 实体转换迁移乘客与显示方块；转换失败清掉新实体 | `CartManager#replaceEntity` | `RobustnessTest` |
 | 受管矿车登记时补回显示方块（第三方清掉显示后不再隐形） | `CartManager#track` | `RobustnessTest` |
@@ -37,9 +38,8 @@ README「功能特性」「数据与兼容」「扩展指南」各项声明与�
 | 已移除的能力 | 旧实现 | 现状 |
 |---|---|---|
 | 掉落被其他插件取消后的多层回滚与补偿 | `delivery/ItemDelivery`（部分成功回滚、背包回滚）、`CartEngine` 的取下事务 | 只保留「未交付的部分放回矿车」这一步，由 `TakeOffTest`、`RobustnessTest` 覆盖；旧实现依赖 `World#dropItem(Naturally)` 的返回值判定，而它在真实 Paper 上从不返回 null，因此旧补偿只在 MockBukkit 里生效 |
-| 扩展回调的异常屏障 | `CartEngine` 的 `safeHandler` / `safeInteract` / `isManagedSafe` / `contextOrNullSafe` | 只剩 tick 循环有屏障（`RobustnessTest#oneThrowingCartTypeDoesNotStopTheTickLoop`）；其余扩展回调抛出的异常直接冒泡到 Bukkit 事件系统 |
+| 扩展回调的异常屏障 | `CartEngine` 的 `safeHandler` / `safeInteract` / `isManagedSafe` / `contextOrNullSafe` | 只剩局部屏障：tick 循环（`RobustnessTest#oneThrowingCartTypeDoesNotStopTheTickLoop`）与取下回调（`CartManager#takeOff` 的 try/catch）；其余扩展回调（`onUse`、`canPlace`、`onPlaced`、`onDestroyed`、`allowsPassengers`）抛出的异常直接冒泡到 Bukkit 事件系统 |
 | 损坏存档数据的容错 | `EngineStateFixTest`（27 项） | 只剩 `RobustnessTest` 里 3 项（类型 id 缺失、方块物品反序列化失败、tick 抛异常），其余场景无覆盖 |
-| 预取消的原版挂载事件 | 旧版在 `EntityMountEvent` 已被取消时仍走自己的处理 | `RidingTest` 只覆盖插件自己取消挂载 |
 
 ## 需要真实服务器验证的部分
 

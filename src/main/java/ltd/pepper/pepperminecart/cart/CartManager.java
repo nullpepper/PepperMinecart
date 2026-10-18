@@ -260,14 +260,34 @@ public final class CartManager implements PepperMinecartAPI {
         }
 
         menus.closeAll(minecart); // 先让界面把改动写回矿车，取下的才是最新的方块物品
-        ItemStack block = cart.type().takeOff(cart);
+        ItemStack block;
+        try {
+            block = cart.type().takeOff(cart);
+        } catch (RuntimeException e) {
+            // 取下回调抛异常时不能再往下走：类型可能只做了一半（清空库存、换过实体），
+            // 但矿车与它保存的方块物品都还在，保持原样比继续交付安全
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "矿车 " + minecart.getUniqueId() + " 的取下回调抛出异常，已保持原样", e);
+            player.sendMessage("取下矿车方块时出错，矿车保持原样");
+            return true;
+        }
         if (block == null) {
             plugin.getLogger().warning("矿车 " + minecart.getUniqueId() + " 没有可取下的方块物品（数据损坏？），已保持原样");
             return true;
         }
 
         Location location = cart.minecart().getLocation();
-        ItemStack undelivered = deliver(player, block, mode, location);
+        ItemStack undelivered;
+        try {
+            undelivered = deliver(player, block, mode, location);
+        } catch (RuntimeException e) {
+            // 交付本身出错时方块还在手上，整份放回矿车，别丢
+            cart.setBlockItem(block);
+            plugin.getLogger().log(java.util.logging.Level.WARNING,
+                    "矿车 " + minecart.getUniqueId() + " 的取下交付抛出异常，方块已放回矿车", e);
+            player.sendMessage("交付矿车方块时出错，方块已放回矿车");
+            return true;
+        }
         if (undelivered != null) {
             // 交付被其他插件取消（例如领地插件取消 ItemSpawnEvent）：只把没交付出去的部分放回矿车。
             // 不能拿 takeOff 之前的快照回滚——类型可能已经把内容物掉在地上（容器 DROP 策略），
@@ -366,10 +386,25 @@ public final class CartManager implements PepperMinecartAPI {
                 if (passenger.isInsideVehicle()) {
                     passenger.leaveVehicle();
                 }
-                replacement.addPassenger(passenger);
+                // addPassenger 被拒时只返回 false、不抛异常（例如别的插件取消了 EntityMountEvent），
+                // 必须自己判断：否则转换会“成功”地把乘客留在原地，车开走后人就掉下去了
+                if (!replacement.addPassenger(passenger)) {
+                    throw new IllegalStateException("乘客 " + passenger.getUniqueId() + " 无法换乘（可能被其他插件取消）");
+                }
             }
         } catch (RuntimeException e) {
-            // 乘客搬不过去就当作没替换过：留着新实体只会变成一辆多出来的矿车
+            // 乘客搬不过去就当作没替换过：把人还回旧车、把新实体删掉。
+            // 此处旧实体尚未清理，仍是完好的。注意要按原名单归还：失败的那个乘客
+            // 根本没进新实体的名册，只看 replacement.getPassengers() 会把他漏在原地。
+            for (Entity passenger : passengers) {
+                if (passenger.isInsideVehicle()) {
+                    passenger.leaveVehicle();
+                }
+                if (!old.addPassenger(passenger)) {
+                    plugin.getLogger().warning("乘客 " + passenger.getUniqueId() + " 换乘被拒，已留在原地");
+                    passenger.teleport(old.getLocation());
+                }
+            }
             replacement.remove();
             throw e;
         }

@@ -19,6 +19,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # PepperLib 自己的构建要求 JDK 25 工具链（buildSrc 里的 pepper.java-conventions）。
+      # 先装一个 25 备用，但不让它成为 JAVA_HOME（紧接着的 JDK 21 会覆盖），
+      # 只在发布那一步把路径交给 Gradle 的工具链探测——runner 上没有 foojay，
+      # 不显式给路径的话 PepperLib 会直接以 "Toolchain auto-provisioning is not enabled" 失败。
+      - name: Set up JDK 25 (PepperLib toolchain)
+        id: jdk25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '25'
+
       - name: Set up JDK 21
         uses: actions/setup-java@v4
         with:
@@ -43,7 +54,10 @@ jobs:
 
       - name: Publish PepperLib to mavenLocal
         working-directory: .ci/PepperLib
-        run: ./gradlew publishToMavenLocal -x test --no-daemon
+        run: >-
+          ./gradlew publishToMavenLocal -x test --no-daemon
+          -Porg.gradle.java.installations.paths=${{ steps.jdk25.outputs.path }}
+          -Porg.gradle.java.installations.auto-download=false
 
       # build → check（test + verifyPepperLibVersion）+ shadowJar，与本地发布前的验证一致。
       - name: Build and test

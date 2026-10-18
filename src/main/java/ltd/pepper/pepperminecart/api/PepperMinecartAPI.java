@@ -28,7 +28,12 @@ public interface PepperMinecartAPI {
      */
     void registerCartType(Plugin owner, CartType type);
 
-    /** 注销矿车类型。该类型的已有矿车改按普通方块矿车处理，方块不会丢失。内置类型不可注销。 */
+    /**
+     * 注销矿车类型。该类型的已有矿车改按普通方块矿车处理，方块不会丢失。内置类型不可注销。
+     *
+     * @throws NullPointerException {@code id} 为 {@code null}（注册那边用的是
+     *                              {@link IllegalArgumentException}，这里对齐 {@code Map#remove} 的约定）
+     */
     void unregisterCartType(NamespacedKey id);
 
     @Nullable CartType getCartType(NamespacedKey id);
