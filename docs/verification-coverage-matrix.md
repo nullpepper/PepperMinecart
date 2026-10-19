@@ -29,6 +29,7 @@ README「功能特性」「数据与兼容」「扩展指南」各项声明与�
 | 领地保护：伪事件后端的四种取消、界面闸（按材质路由旗标、原版矿车不重复判、总开关） | `protection` 包、`CartManager#use` | `ProtectionIntegrationTest`、`protection/*` |
 | 没装 PepperClaim 时插件照常启用：Claim 通道缺席不拖垮 `onEnable` | `PepperClaimLinkage`、`ProtectionGateway` | `PepperClaimLinkageTest`、`ProtectionGatewayTest#absentClaimChannel*`（实机：Paper 1.21.4 无 PepperClaim 冒烟） |
 | PepperClaim 装了但不可用（坏 jar / 版本不兼容）时同样降级，不抛 `NoClassDefFoundError` | `PepperClaimLinkage#installed/create/ready` | `PepperClaimLinkageTest`（实机：坏 jar 冒烟） |
+| PepperClaim 已安装且门面就绪时打印 `联动 READY` 并接入判定通道 | `PepperClaimLinkage#ready`、`PepperClaimProtection` | `PepperClaimProtectionTest`（实机：替身 PepperClaim 插件冒烟，`BOTH` 与 `PEPPERCLAIM` 两档） |
 | 配置解析、热重载、默认文件 | `config` 包、`PepperMinecartCommand` | `config/*`、`PluginSmokeTest` |
 | 交付产物（`-all` 包含重定位后的 bStats） | `build.gradle.kts` | `BuildArtifactContractTest` |
 
