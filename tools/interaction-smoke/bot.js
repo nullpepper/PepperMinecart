@@ -182,11 +182,9 @@ async function freshCart () {
   return cart
 }
 
-async function dumpCart (label) {
-  if (!DEBUG) return
-  console.log(`NBT ${label}:`)
-  bot.chat('/data get entity @e[type=minecart,limit=1,sort=nearest,distance=..8]')
-  await sleep(700)
+/** 场上现有的掉落物实体数量。 */
+function itemCount () {
+  return Object.values(bot.entities).filter((e) => e.name === 'item').length
 }
 
 async function main () {
@@ -395,9 +393,11 @@ async function main () {
   await cmd('setblock 2 101 0 minecraft:activator_rail')
   await cmd('fill 3 101 0 6 101 0 minecraft:rail')
   await sleep(800)
+  const itemsBefore = itemCount()
   await cmd('data merge entity @e[type=minecart,limit=1,sort=nearest,distance=..6] {Motion:[0.08,0.0,0.0]}')
   const ejected = await waitFor(
-    () => Object.values(bot.entities).find((e) => e.name === 'item' && e.position.distanceTo(bot.entity.position) < 8),
+    () => itemCount() > itemsBefore &&
+      Object.values(bot.entities).find((e) => e.name === 'item' && e.position.distanceTo(bot.entity.position) < 8),
     4000, 'ejected item')
   check('驶过激活铁轨弹出物品', !!ejected, ejected ? `${ejected.displayName || ''} at ${ejected.position}` : '')
   await sleep(400)
@@ -436,7 +436,7 @@ async function main () {
       'metadata ' + JSON.stringify(cartEntity(ANY_CART)?.metadata))
     check('交付无路可走时方块没凭空消失到背包', count('stone') === 0, `stone=${count('stone')}`)
     const strayItem = Object.values(bot.entities).find((e) => e.name === 'item' && e.position.distanceTo(bot.entity.position) < 8)
-    check('交付被取消时不掉东西', !strayItem, strayItem ? `at ${strayItem.position}` : '')
+    check('交付被取消时不掉东西', itemCount() === 0 && !strayItem, strayItem ? `at ${strayItem.position}` : '')
 
     // 对照组：背包依旧塞满，但允许掉落 -> 方块应该被丢到地上并从矿车上消失
     await cmd('smokehook off')
