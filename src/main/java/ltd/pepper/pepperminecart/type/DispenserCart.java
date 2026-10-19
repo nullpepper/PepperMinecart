@@ -110,13 +110,7 @@ public final class DispenserCart extends ContainerCart {
             inventory.setItem(slot, stack); // 弹出被取消：还回刚扣掉的那一件
             return false;
         }
-        try {
-            save(cart, inventory);
-        } catch (RuntimeException e) {
-            // 东西已经弹出去了，这里再抛出去只会把这次 tick 变成异常；记下来，方块物品上的库存会停在弹出前的样子
-            org.bukkit.Bukkit.getLogger().warning(
-                    "发射器矿车 " + minecart.getUniqueId() + " 弹出成功但保存库存失败：" + e);
-        }
+        save(cart, inventory);
         minecart.getWorld().playSound(minecart.getLocation(), Sound.BLOCK_DISPENSER_DISPENSE, SoundCategory.BLOCKS, 1.0F, 1.0F);
         return true;
     }

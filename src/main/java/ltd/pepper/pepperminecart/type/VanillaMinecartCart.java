@@ -187,6 +187,9 @@ public final class VanillaMinecartCart implements CartType {
     /**
      * 合并方块物品里留下的内容与矿车库存：矿车占自己的槽位，矿车之外（当初装不下而留下的）
      * 保持原样，这样放置时没能掉出去的东西不会在取下时被库存覆盖掉。
+     *
+     * <p>同一个槽位两边都有东西时以矿车里的为准——内置的原版矿车不可能出现这种情况（方块物品
+     * 与实体库存同尺寸、同槽位），这是给自定义类型留的余地，所以只记一条日志，不做腾挪。</p>
      */
     private static ItemStack[] mergeContents(ItemStack[] kept, ItemStack[] live) {
         int size = Math.max(kept.length, live.length);
@@ -195,35 +198,12 @@ public final class VanillaMinecartCart implements CartType {
             ItemStack fromCart = slot < live.length ? live[slot] : null;
             ItemStack fromBlock = slot < kept.length ? kept[slot] : null;
             boolean cartHas = fromCart != null && !fromCart.isEmpty();
-            boolean blockHas = fromBlock != null && !fromBlock.isEmpty();
-            if (cartHas) {
-                merged[slot] = fromCart;
-                if (blockHas && !fromBlock.isSimilar(fromCart)) {
-                    // 同一个槽位两边都有东西：矿车里的算更新，方块物品里那份另找空位，不能静默吞掉。
-                    // 内置的原版矿车走不到这里（方块物品与实体库存同尺寸、同槽位），是给自定义类型留的余地。
-                    spill(merged, fromBlock);
-                }
-            } else if (blockHas) {
-                merged[slot] = fromBlock;
+            merged[slot] = cartHas ? fromCart : fromBlock;
+            if (cartHas && fromBlock != null && !fromBlock.isEmpty() && !fromBlock.isSimilar(fromCart)) {
+                Bukkit.getLogger().warning("原版矿车取下时槽位 " + slot + " 两边都有东西，以矿车里的为准："
+                        + fromBlock.getType() + " ×" + fromBlock.getAmount());
             }
         }
         return merged;
-    }
-
-    /** 把合并时多出来的一份放进空槽，或并进同类的堆；真的没有空间时记一条日志。 */
-    private static void spill(ItemStack[] merged, ItemStack extra) {
-        for (int slot = 0; slot < merged.length; slot++) {
-            ItemStack current = merged[slot];
-            if (current == null || current.isEmpty()) {
-                merged[slot] = extra;
-                return;
-            }
-            if (current.isSimilar(extra)) {
-                merged[slot] = current.asQuantity(current.getAmount() + extra.getAmount());
-                return;
-            }
-        }
-        org.bukkit.Bukkit.getLogger().warning(
-                "原版矿车取下时合并内容失败：" + extra.getType() + " ×" + extra.getAmount() + " 没有空槽可放");
     }
 }
