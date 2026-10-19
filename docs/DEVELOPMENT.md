@@ -110,6 +110,19 @@ JAVA_HOME=/path/to/jdk-21 ./gradlew clean build
 MockBukkit 的已知限制：不能构建 `MenuType` 界面（工作站/铁砧界面的打开只验证对应关系），没有方块音效组
 （测试中关闭音效），激活铁轨的方块数据不是 `RedstoneRail`（测试中用代理）。新增功能或修复问题时请同步补充测试。
 
+### 交互冒烟（真实客户端）
+
+`tools/interaction-smoke/` 用一个真实的离线客户端（mineflayer）连进 Paper 1.21.4，按真人操作序列点矿车：
+铺轨放矿车、潜行右键装/取方块、工作站开原版界面、容器塞取内容、保护闸拒绝。断言的全是玩家可见的结果
+（背包数量、界面类型、容器内容、实体元数据里的显示方块），补上 MockBukkit 测不到的协议交互与原版界面那一层。
+
+```bash
+cd tools/interaction-smoke && npm install
+SERVER_DIR=/path/to/paper-server MC_PORT=25599 ./run.sh   # STUB_CLAIM=1 可加测保护闸
+```
+
+细节与前置条件（离线 UUID 进 ops.json、`online-mode=false`、矿车必须放在铁轨上）见该目录的 README。
+
 ## 8. 2.0.0 迁移注意
 
 破坏性变更的完整清单见 CHANGELOG，下面三条最容易踩：

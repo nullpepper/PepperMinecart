@@ -145,6 +145,11 @@
 - 注册矿车类型时显式校验 id 与材质（`Set.copyOf` 之前判空、拒绝 `minecraft`/`bukkit` 命名空间），
   注销时不再因 id 的命名空间为空而抛异常。
 
+### 测试
+- 新增 `tools/interaction-smoke/`：用真实客户端（mineflayer）连进 Paper 1.21.4，按真人操作序列验证铺轨放矿车、
+  潜行右键装/取方块、工作站开界面、容器塞取内容、保护闸拒绝等 22 项玩家可见结果。MockBukkit 测不到协议交互与
+  原版界面，这一层由它补上；上面第一条「插件无法启用」就是这套工具在实机冒烟时抓到的。
+
 ### 移除
 - 扩展回调的异常屏障（旧版的 `safeHandler` / `safeInteract` / `isManagedSafe` / `contextOrNullSafe`）：现在除 tick 循环之外，
   扩展钩子抛出的异常会直接冒泡到 Bukkit 事件系统。旧版会吞掉异常并取保守结果（放置抛异常→拒绝且不扣物品、容器策略抛异常→按

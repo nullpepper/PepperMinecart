@@ -1,0 +1,13 @@
+{
+  "name": "pepperminecart-interaction-smoke",
+  "private": true,
+  "version": "1.0.0",
+  "description": "用真实客户端（mineflayer）对 Paper 服务端上的 PepperMinecart 做交互冒烟",
+  "main": "bot.js",
+  "scripts": {
+    "smoke": "node bot.js"
+  },
+  "dependencies": {
+    "mineflayer": "^4.39.0"
+  }
+}
