@@ -1,0 +1,8 @@
+name: PepperClaim
+version: 0.2.0-stub
+main: stub.StubPlugin
+api-version: '1.21'
+commands:
+  claimstub:
+    description: 切换替身门面的放行/拒绝
+    usage: /claimstub <on|off>

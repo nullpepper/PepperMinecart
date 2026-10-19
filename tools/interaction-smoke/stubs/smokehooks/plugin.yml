@@ -1,0 +1,8 @@
+name: SmokeHooks
+version: 0.1.0-stub
+main: smokehooks.SmokeHooksPlugin
+api-version: '1.21'
+commands:
+  smokehook:
+    description: 切换"取消所有掉落物生成"
+    usage: /smokehook <on|off>

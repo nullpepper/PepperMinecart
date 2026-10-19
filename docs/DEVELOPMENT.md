@@ -112,14 +112,19 @@ MockBukkit 的已知限制：不能构建 `MenuType` 界面（工作站/铁砧�
 
 ### 交互冒烟（真实客户端）
 
-`tools/interaction-smoke/` 用一个真实的离线客户端（mineflayer）连进 Paper 1.21.4，按真人操作序列点矿车：
-铺轨放矿车、潜行右键装/取方块、工作站开原版界面、容器塞取内容、保护闸拒绝。断言的全是玩家可见的结果
+`tools/interaction-smoke/` 用一个真实的离线客户端（mineflayer）连进 Paper 1.21.4，按真人操作序列点矿车，49 项断言：
+铺轨放矿车、潜行右键装/取方块、工作站开原版界面、容器塞取内容并取下再装回、领地保护拒绝、原版箱/漏斗/熔炉矿车
+的来回转换、铁砧界面、发射器压激活铁轨弹出、以及「交付被别的插件取消」时矿车保持原样。断言的全是玩家可见的结果
 （背包数量、界面类型、容器内容、实体元数据里的显示方块），补上 MockBukkit 测不到的协议交互与原版界面那一层。
 
 ```bash
 cd tools/interaction-smoke && npm install
-SERVER_DIR=/path/to/paper-server MC_PORT=25599 ./run.sh   # STUB_CLAIM=1 可加测保护闸
+cd stubs && SERVER_DIR=/path/to/paper-server ./build.sh          # 两个替身插件
+cd /path/to/paper-server && STUB_CLAIM=1 STUB_HOOKS=1 SERVER_DIR=$PWD MC_PORT=25599 /path/to/run.sh
 ```
+
+`STUB_CLAIM` 需要 `PepperClaim` 替身（`/claimstub on|off`），`STUB_HOOKS` 需要 `SmokeHooks` 替身
+（`/smokehook on|off`，取消所有 `ItemSpawnEvent`）；不装时对应的几组自动跳过。
 
 细节与前置条件（离线 UUID 进 ops.json、`online-mode=false`、矿车必须放在铁轨上）见该目录的 README。
 

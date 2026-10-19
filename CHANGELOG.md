@@ -146,9 +146,12 @@
   注销时不再因 id 的命名空间为空而抛异常。
 
 ### 测试
-- 新增 `tools/interaction-smoke/`：用真实客户端（mineflayer）连进 Paper 1.21.4，按真人操作序列验证铺轨放矿车、
-  潜行右键装/取方块、工作站开界面、容器塞取内容、保护闸拒绝等 22 项玩家可见结果。MockBukkit 测不到协议交互与
+- 新增 `tools/interaction-smoke/`：用真实客户端（mineflayer）连进 Paper 1.21.4，按真人操作序列跑 49 项断言，
+  覆盖铺轨放矿车、潜行右键装/取方块、工作站开界面、容器塞取内容与取下再装回、领地保护拒绝、原版箱/漏斗/熔炉矿车
+  的来回转换、铁砧界面、发射器压激活铁轨弹出、以及「交付被别的插件取消」时矿车保持原样（附放开掉落的对照组）。
+  断言的全是玩家可见结果（背包数量、界面类型、容器内容、实体元数据里的显示方块）。MockBukkit 测不到协议交互与
   原版界面，这一层由它补上；上面第一条「插件无法启用」就是这套工具在实机冒烟时抓到的。
+  两个替身插件（`plugins/` 里的 `SmokeHooks` 与 `PepperClaim`）的源码与编译脚本一并放在 `tools/interaction-smoke/stubs/`。
 
 ### 移除
 - 扩展回调的异常屏障（旧版的 `safeHandler` / `safeInteract` / `isManagedSafe` / `contextOrNullSafe`）：现在除 tick 循环之外，
