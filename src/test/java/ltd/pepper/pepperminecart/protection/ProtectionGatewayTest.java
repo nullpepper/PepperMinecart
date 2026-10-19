@@ -63,6 +63,28 @@ class ProtectionGatewayTest {
     }
 
     @Test
+    void absentClaimChannelDeniesNothingButDoesNotBlowUp() {
+        Fake events = new Fake();
+        events.placeDenied = true;
+
+        ProtectionGateway g = gateway(ProtectionBackend.PEPPERCLAIM, true, events, null);
+
+        assertFalse(g.denyPlace(null, null), "没装 PepperClaim：该档无通道可咨询，动作放行");
+        assertFalse(events.consulted(), "PEPPERCLAIM 档不得回落到伪事件通道");
+    }
+
+    @Test
+    void absentClaimChannelStillLetsBothBackendUseEvents() {
+        Fake events = new Fake();
+        events.placeDenied = true;
+
+        ProtectionGateway g = gateway(ProtectionBackend.BOTH, true, events, null);
+
+        assertTrue(g.denyPlace(null, null), "BOTH 档：Claim 通道缺席时伪事件通道照常把关");
+        assertTrue(events.consulted());
+    }
+
+    @Test
     void eventsBackendConsultsOnlyEventsStrategy() {
         Fake events = new Fake();
         Fake claim = new Fake();

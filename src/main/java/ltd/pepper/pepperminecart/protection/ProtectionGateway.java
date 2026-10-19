@@ -8,6 +8,7 @@ import java.util.function.Supplier;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.entity.Player;
+import org.jetbrains.annotations.Nullable;
 
 /**
  * 领地保护组合根：按 {@code protection-backend} 档位决定咨询哪些策略，对外只暴露四个动作闸。
@@ -23,6 +24,11 @@ import org.bukkit.entity.Player;
  *
  * <p>策略由外部注入（便于以假实现做纯 JVM 测试）；配置值经 {@link BooleanSupplier}/
  * {@link Supplier} 实时读取，故 {@code /pm reload} 后立即生效。</p>
+ *
+ * <p><b>PepperClaim 通道可以为 {@code null}</b>：没装 PepperClaim 时它整类都装载不起来
+ * （见 {@link PepperClaimLinkage}），此时该档位按「此通道不存在」处理——{@code PEPPERCLAIM}
+ * 档下动作全部放行，{@code BOTH} 档下只走伪事件通道。这不是降级妥协：插件本来就不该因为
+ * 一个没装的可选依赖而拒绝启用。</p>
  *
  * <p><b>为什么短路</b>：两条通道都会把拒绝反馈给玩家并计入属主统计（Claim 通道经
  * {@code ClaimApi.denied} 发节流文案 + 计数；伪事件通道最终由对方的方块事件监听器计数）。
@@ -48,14 +54,15 @@ public final class ProtectionGateway {
     private final BooleanSupplier respectProtection;
     private final Supplier<ProtectionBackend> backend;
     private final ClaimProtection events;
-    private final ClaimProtection claim;
+    /** PepperClaim 通道；未安装胡椒领地时为 {@code null}（见 {@link PepperClaimLinkage}）。 */
+    private final @Nullable ClaimProtection claim;
 
     public ProtectionGateway(BooleanSupplier respectProtection, Supplier<ProtectionBackend> backend,
-                             ClaimProtection events, ClaimProtection claim) {
+                             ClaimProtection events, @Nullable ClaimProtection claim) {
         this.respectProtection = Objects.requireNonNull(respectProtection, "respectProtection");
         this.backend = Objects.requireNonNull(backend, "backend");
         this.events = Objects.requireNonNull(events, "events");
-        this.claim = Objects.requireNonNull(claim, "claim");
+        this.claim = claim;
     }
 
     /** 放置方块到矿车。 */
@@ -99,7 +106,7 @@ public final class ProtectionGateway {
      */
     private boolean deniedByAny(Predicate<ClaimProtection> ask) {
         ProtectionBackend b = backend.get();
-        if (consultsClaim(b) && ask.test(this.claim)) {
+        if (consultsClaim(b) && this.claim != null && ask.test(this.claim)) {
             return true;
         }
         return consultsEvents(b) && ask.test(this.events);

@@ -10,9 +10,9 @@
 插件的 `api-version` 同时提升为 `1.21.4`，与 README 声明的基线一致：1.21.0–1.21.3 会在加载阶段就被拒绝，
 而不是启动成功、直到右键工作站或铁砧才抛 `NoSuchMethodError`。
 
-测试规模变化：旧版 42 个测试类 / 198 个用例，本版 22 个类 / 156 个用例（重构本身先是 21 类 / 140 项，
-三轮修复又补回 16 项）。删除的 34 个测试文件里，多数集中在旧版的「掉落被取消后的回滚补偿」与
-「损坏矿车数据容错」上，取舍理由见下面「移除」一节。
+测试规模变化：旧版 42 个测试类 / 198 个用例，本版 23 个类 / 160 个用例（其中 1 项按设计跳过）。
+重构本身先是 21 类 / 140 项，三轮代码复核与一轮实机冒烟又补回 20 项。删除的 34 个测试文件里，
+多数集中在旧版的「掉落被取消后的回滚补偿」与「损坏矿车数据容错」上，取舍理由见下面「移除」一节。
 
 ### 破坏性变更（扩展 API）
 
@@ -95,6 +95,15 @@
     显式 `upgrade` 补键 + 备份、损坏文件回落默认不抛异常。
 
 ### 修复
+- **修复一个会让插件完全无法启用的缺陷**（`v2.0.0` 标签后、实机 Paper 1.21.4 冒烟时发现）：
+  `onEnable` 直接构造 `PepperClaimProtection`，而该类在签名里引用 `ltd.pepper.claim.ClaimApi`——
+  没装 PepperClaim 的服务器上，**构造它本身**就抛 `NoClassDefFoundError`（方法引用
+  `PepperClaimProtection::lookupApi` 的描述符要求先解析 `ClaimApi`），绕过了「未安装则放行」的全部
+  兜底，插件被 Paper 整个禁用。现改为经 `PepperClaimLinkage` 这一装载边界取通道：探测用
+  `Class.forName(..., initialize=false)` 并**同时兜住 `RuntimeException`**（坏掉的 PepperClaim jar
+  会被 Paper 的字节码重映射抛 `Unsupported class file major version`，那不是 `LinkageError`），
+  未安装 / 装了但不可用时该通道为 `null`，由 `ProtectionGateway` 按「此通道不存在」处理
+  （`PEPPERCLAIM` 档动作全放行，`BOTH` 档仍走伪事件通道）。
 - 容器矿车直接打开物品里的方块实体快照（位于 `BlockPos.ZERO`）：按 Paper 1.21.4 源码，木桶的开合逻辑会对该坐标
   `setBlock`，即在世界 (0, 0, 0) 放下一个木桶。现改为按方块的库存类型新建界面。
   （该结论已在 Paper `ver/1.21.4` 源码中端到端核对：`CraftMetaBlockState#getBlockState` 在物品没有方块实体坐标时

@@ -9,7 +9,7 @@ import ltd.pepper.pepperminecart.command.PepperMinecartCommand;
 import ltd.pepper.pepperminecart.config.PluginConfig;
 import ltd.pepper.pepperminecart.cooldown.InteractionCooldown;
 import ltd.pepper.pepperminecart.protection.BukkitEventProtection;
-import ltd.pepper.pepperminecart.protection.PepperClaimProtection;
+import ltd.pepper.pepperminecart.protection.PepperClaimLinkage;
 import ltd.pepper.pepperminecart.protection.ProtectionBackend;
 import ltd.pepper.pepperminecart.protection.ProtectionGateway;
 import ltd.pepper.pepperminecart.type.AnvilCart;
@@ -70,7 +70,7 @@ public class PepperMinecartPlugin extends JavaPlugin {
                 config::respectProtection,
                 config::protectionBackend,
                 new BukkitEventProtection(),
-                new PepperClaimProtection(getLogger()));
+                PepperClaimLinkage.create(getLogger()));
         logProtectionBackend();
 
         InteractionCooldown cooldown = new InteractionCooldown(config);
@@ -124,7 +124,7 @@ public class PepperMinecartPlugin extends JavaPlugin {
      * 就绪后再补一行（{@link #trackLateLinkage()}），避免把“装载中”误读为“未安装”。
      */
     private void logProtectionBackend() {
-        boolean claimReady = PepperClaimProtection.available();
+        boolean claimReady = PepperClaimLinkage.ready();
         boolean claimInstalled = getServer().getPluginManager().getPlugin("PepperClaim") != null;
         getLogger().info(protectionBackendLogLine(config.protectionBackend(), claimReady, claimInstalled));
         if (!claimReady && claimInstalled) {
@@ -155,7 +155,7 @@ public class PepperMinecartPlugin extends JavaPlugin {
         BukkitTask[] task = new BukkitTask[1];
         int[] attempts = {0};
         task[0] = getServer().getScheduler().runTaskTimer(this, () -> {
-            if (PepperClaimProtection.available()) {
+            if (PepperClaimLinkage.ready()) {
                 getLogger().info("[PepperMinecart] 领地保护后端: " + config.protectionBackend()
                         + "；PepperClaim 联动就绪（enable 期尚未装载完成）");
                 task[0].cancel();
